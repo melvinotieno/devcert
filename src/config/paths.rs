@@ -15,7 +15,7 @@ use std::{env, path};
 use anyhow::{Context, Result};
 
 /// The default directory name for devcert configuration.
-const DIR: &str = ".devcert";
+pub const DIR: &str = ".devcert";
 
 /// Gets the global base directory path for devcert.
 ///
