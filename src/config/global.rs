@@ -3,12 +3,12 @@
 //! This module handles loading and managing the global config file,
 //! which contains user preferences that apply across all projects.
 
-use std::fs;
+use std::{fs, path::PathBuf};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::config::paths::get_global_config_path;
+use crate::config::paths::{get_global_base_path, get_global_config_path};
 
 /// Global configuration for DevCert.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +28,11 @@ impl Default for GlobalConfig {
 }
 
 impl GlobalConfig {
+    /// Returns the global base path for DevCert.
+    pub fn get_base_path() -> Result<PathBuf> {
+        get_global_base_path()
+    }
+
     /// Loads the global configuration from the file system.
     ///
     /// If the config file does not exist, returns the default configuration.
