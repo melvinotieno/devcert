@@ -3,9 +3,10 @@
 //! This module handles the creation and management of the local CA,
 //! which is used to sign leaf certificates for development projects.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
 
@@ -20,6 +21,8 @@ use time::{Duration, OffsetDateTime};
 pub struct LocalAuthority {
     /// Path to the CA's private key file.
     pub key_path: PathBuf,
+    /// Path to the CA's certificate file.
+    pub cert_path: PathBuf,
 }
 
 impl LocalAuthority {
@@ -31,14 +34,17 @@ impl LocalAuthority {
         Self::create_base_dir(&dir)?;
 
         // Define paths for the key and certificate
-        let key_path = dir.join("localCA-key.pem");
-        let cert_path = dir.join("localCA.pem");
+        let key_path = dir.join("devcertCA-key.pem");
+        let cert_path = dir.join("devcertCA.pem");
 
         // Check if the key and certificate already exist
         if key_path.exists() && cert_path.exists() {
-            println!("CA already exists. Skipping generation.");
+            println!("Using existing CA found at: {:?}.", dir);
 
-            return Ok(Self { key_path });
+            return Ok(Self {
+                key_path,
+                cert_path,
+            });
         }
 
         // Generate a self-signed CA
@@ -50,7 +56,10 @@ impl LocalAuthority {
         Self::write_file(&key_path, &key_pair.serialize_pem().as_bytes(), 0o400)?;
         Self::write_file(&cert_path, &cert.pem().as_bytes(), 0o644)?;
 
-        Ok(Self { key_path })
+        Ok(Self {
+            key_path,
+            cert_path,
+        })
     }
 
     /// Signs a leaf certificate using the local CA.
