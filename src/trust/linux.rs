@@ -1,3 +1,8 @@
+//! Linux-specific implementation of the trust store management for DevCert.
+//!
+//! This module handles the installation and uninstallation of the CA certificate
+//! into the system trust store on Linux, supporting multiple distributions.
+
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -5,6 +10,100 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use colored::Colorize;
+
+use crate::trust::TrustStore;
+
+impl TrustStore for LinuxTrustStore {
+    /// Checks if the CA certificate is already trusted by the system.
+    fn check(&self) -> Result<bool> {
+        if self.distro == Distro::Unknown {
+            return Ok(false);
+        }
+
+        Ok(self.cert_path().map_or(false, |p| p.exists()))
+    }
+
+    /// Installs the CA certificate into the system trust store.
+    fn install(&self) -> Result<()> {
+        if self.distro == Distro::Unknown {
+            println!(
+                "{}",
+                format!(
+                    "Automatic trust store installation is not supported on this Linux distribution.\n\
+                     You can manually trust the CA by adding {:?} to your system's certificate store.",
+                    self.cert_path
+                ).yellow()
+            );
+
+            return Ok(());
+        }
+
+        if self.check()? {
+            println!(
+                "{} DevCert CA is already installed in the system trust store",
+                self.cert_type()
+            );
+
+            return Ok(());
+        }
+
+        let dest = self
+            .cert_path()
+            .context("Could not determine destination path for CA certificate")?;
+
+        println!("Installing DevCert CA into the system trust store (sudo required)...");
+
+        let cert_content = std::fs::read(&self.cert_path)
+            .with_context(|| format!("Failed to read certificate from {:?}", self.cert_path))?;
+
+        self.sudo_write(&dest, &cert_content)?;
+        self.refresh_trust_store()?;
+
+        println!(
+            "{}",
+            format!(
+                "{} DevCert CA is now installed in the system trust store.",
+                self.cert_type()
+            )
+            .green()
+        );
+
+        Ok(())
+    }
+
+    /// Uninstalls the CA certificate from the system trust store.
+    fn uninstall(&self) -> Result<()> {
+        if self.distro == Distro::Unknown || !self.check()? {
+            println!(
+                "{} DevCert CA is not installed in the system trust store",
+                self.cert_type()
+            );
+
+            return Ok(());
+        }
+
+        let dest = self
+            .cert_path()
+            .context("Could not determine system certificate path for this distribution")?;
+
+        println!("Removing DevCert CA from the system trust store (sudo required)...");
+
+        self.sudo_run(&["rm", "-f", &dest.to_string_lossy()])?;
+        self.refresh_trust_store()?;
+
+        println!(
+            "{}",
+            format!(
+                "{} DevCert CA has been removed from the system trust store.",
+                self.cert_type()
+            )
+            .green()
+        );
+
+        Ok(())
+    }
+}
 
 /// Trust store implementation for Linux, supporting multiple distributions.
 pub struct LinuxTrustStore {
