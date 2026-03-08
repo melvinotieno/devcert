@@ -2,9 +2,10 @@
 //!
 //! This module handles the creation and management of the leaf certificate.
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     env, fs,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
 
