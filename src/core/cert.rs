@@ -65,7 +65,7 @@ impl LeafCert {
             domains: config.domains.clone(),
             key_path: current_dir
                 .join(&config.key_path)
-                .join(format!("{}.key.pem", config.name)),
+                .join(format!("{}-key.pem", config.name)),
             cert_path: current_dir
                 .join(&config.cert_path)
                 .join(format!("{}.pem", config.name)),
