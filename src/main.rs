@@ -9,6 +9,7 @@ mod cli;
 mod config;
 mod core;
 mod report;
+mod system;
 mod trust;
 
 use clap::Parser;
