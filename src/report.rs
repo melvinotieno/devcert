@@ -67,9 +67,10 @@ pub fn debug(msg: &str) {
 /// ```
 #[macro_export]
 macro_rules! success {
-    ($($arg:tt)*) => {
+    ($($arg:tt)*) => {{
+        use colored::Colorize;
         println!("{}", format!($($arg)*).green().bold())
-    };
+    }};
 }
 
 /// Prints a formatted informational message.
@@ -79,9 +80,10 @@ macro_rules! success {
 /// ```
 #[macro_export]
 macro_rules! info {
-    ($($arg:tt)*) => {
+    ($($arg:tt)*) => {{
+        use colored::Colorize;
         println!("{}", format!($($arg)*).blue().bold())
-    };
+    }};
 }
 
 /// Prints a formatted warning message.
@@ -91,9 +93,10 @@ macro_rules! info {
 /// ```
 #[macro_export]
 macro_rules! warn {
-    ($($arg:tt)*) => {
+    ($($arg:tt)*) => {{
+        use colored::Colorize;
         eprintln!("{}", format!($($arg)*).yellow().bold())
-    };
+    }};
 }
 
 /// Prints a formatted error message.
@@ -103,9 +106,10 @@ macro_rules! warn {
 /// ```
 #[macro_export]
 macro_rules! error {
-    ($($arg:tt)*) => {
+    ($($arg:tt)*) => {{
+        use colored::Colorize;
         eprintln!("{}", format!($($arg)*).red().bold())
-    };
+    }};
 }
 
 /// Prints a formatted debug message.
@@ -117,9 +121,10 @@ macro_rules! error {
 /// ```
 #[macro_export]
 macro_rules! debug {
-    ($($arg:tt)*) => {
+    ($($arg:tt)*) => {{
+        use colored::Colorize;
         if std::env::var("DEVCERT_DEBUG").is_ok() {
             eprintln!("{}", format!($($arg)*).cyan().bold())
         }
-    };
+    }};
 }
