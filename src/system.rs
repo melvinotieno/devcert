@@ -1,9 +1,9 @@
 //! Lazily-evaluated, cached system health status.
 //!
 //! Each component is computed at most once (via [`OnceLock`]) and may depend
-//! on earlier components — e.g. `config` and `ca` are skipped if `home` is not OK.
+//! on earlier components — e.g. `config` and `ca` are skipped if `dir` is not OK.
 //!
-//! Dependency order: `home` → `config`, `ca` → `trust`
+//! Dependency order: `dir` -> `config` -> `ca` -> `trust`
 
 mod checks;
 mod component;
@@ -19,18 +19,14 @@ pub use component::Component;
 use crate::config::devcert::CaRoot;
 use crate::config::devcert::DevCert;
 
-use self::dir::DirError;
-
 /// Represents the overall health status of the system, with lazily-evaluated components.
 pub struct SystemStatus {
     /// Determines whether to use the global DevCert root or a project-scoped root.
     root: CaRoot,
-    /// Resolved home directory path for the active root. `DirError` if resolution failed.
-    dir: OnceLock<Result<PathBuf, DirError>>,
+    /// Resolved home directory path for the active root, or an error if resolution failed.
+    dir: OnceLock<Result<PathBuf, String>>,
     /// Loaded DevCert config, or an error string if it failed to load.
     devcert: OnceLock<Result<DevCert, String>>,
-    /// Status of the home directory.
-    home: OnceLock<Component>,
     /// Status of the relevant config file (DevCert or project).
     config: OnceLock<Component>,
     /// Status of the local Certificate Authority.
@@ -50,7 +46,6 @@ impl SystemStatus {
             root,
             dir: OnceLock::new(),
             devcert: OnceLock::new(),
-            home: OnceLock::new(),
             config: OnceLock::new(),
             ca: OnceLock::new(),
             trust: OnceLock::new(),
@@ -61,16 +56,14 @@ impl SystemStatus {
     ///
     /// Triggers evaluation of all components if not already cached.
     pub fn is_ok(&self) -> bool {
-        let home = self.home();
         let config = self.config();
         let ca = self.ca();
         let trust = self.trust();
 
-        let status = home.is_ok() && config.is_ok() && ca.is_ok() && trust.is_ok();
+        let status = config.is_ok() && ca.is_ok() && trust.is_ok();
 
         crate::debug!(
-            "System status: home={:?}, config={:?}, ca={:?}, trust={:?} => overall={}",
-            home.is_ok(),
+            "System status: config={:?}, ca={:?}, trust={:?} => overall={}",
             config.is_ok(),
             ca.is_ok(),
             trust.is_ok(),
@@ -80,26 +73,18 @@ impl SystemStatus {
         status
     }
 
-    /// Returns the status of the home directory.
-    pub fn home(&self) -> &Component {
-        self.home.get_or_init(|| match self.dir() {
-            Ok(_) => Component::Ok,
-            Err(DirError::Missing) => Component::Missing,
-            Err(DirError::Invalid(reason)) => Component::Invalid {
-                reason: reason.clone(),
-            },
-        })
-    }
-
     /// Returns the status of the config file.
     ///
     /// Skipped automatically if the home directory is not OK.
     pub fn config(&self) -> &Component {
         self.config.get_or_init(|| match self.dir() {
             Ok(_) => checks::check_config(&self.root, self.devcert()),
-            _ => Component::Skipped {
-                because: "Home directory does not exist or is invalid",
-            },
+            Err(reason) => {
+                crate::debug!("Skipping config check: {}", reason);
+                Component::Skipped {
+                    because: "Home directory does not exist or is invalid",
+                }
+            }
         })
     }
 
@@ -109,9 +94,12 @@ impl SystemStatus {
     pub fn ca(&self) -> &Component {
         self.ca.get_or_init(|| match self.dir() {
             Ok(path) => checks::check_ca(path),
-            _ => Component::Skipped {
-                because: "Home directory does not exist or is invalid",
-            },
+            Err(reason) => {
+                crate::debug!("Skipping ca check: {}", reason);
+                Component::Skipped {
+                    because: "Home directory does not exist or is invalid",
+                }
+            }
         })
     }
 
@@ -137,10 +125,11 @@ impl SystemStatus {
             .map_err(|e| e.as_str())
     }
 
-    /// Returns the resolved home directory path, or `DirErr` if resolution failed.
-    fn dir(&self) -> Result<&PathBuf, &DirError> {
+    /// Returns the resolved home directory path, or `Err(&str)` if resolution failed.
+    fn dir(&self) -> Result<&PathBuf, &str> {
         self.dir
             .get_or_init(|| dir::resolve_dir(&self.root))
             .as_ref()
+            .map_err(|e| e.as_str())
     }
 }
