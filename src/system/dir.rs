@@ -48,43 +48,33 @@ pub fn create_dir_all(path: &Path, #[cfg(unix)] mode: u32) -> Result<()> {
 ///
 /// # Returns
 /// * `Ok(PathBuf)` - The resolved directory path if it exists and is valid.
-/// * `Err(DirError)` - An error indicating why the directory is missing or invalid
-///
-/// # Errors
-/// * `DirError::Missing` - The directory does not exist and needs to be created
-/// * `DirError::Invalid(String)` - The directory exists but is in an unexpected state
-/// (e.g. it's a file instead of a directory, or there was an error accessing it)
+/// * `Err(String)` - An error indicating why the directory is missing or invalid
 ///
 /// # Example
 /// ```rust
 /// let dir = resolve_dir(&CaRoot::Global)?;
 /// println!("Global CA home directory: {}", dir.display());
 /// ```
-pub fn resolve_dir(root: &CaRoot) -> Result<PathBuf, DirError> {
-    let path = match root {
-        CaRoot::Global => DevCert::dir_path(),
-        CaRoot::Project => Project::dir_path(),
-    }
-    .map_err(|e| DirError::Invalid(e.to_string()))?;
+pub fn resolve_dir(root: &CaRoot) -> Result<PathBuf, String> {
+    let (path, permissions) = match root {
+        CaRoot::Global => (DevCert::dir_path(), 0o700),
+        CaRoot::Project => (Project::dir_path(), 0o755),
+    };
+
+    let path = path.map_err(|e| e.to_string())?;
 
     if !path.exists() {
-        return Err(DirError::Missing);
+        // Attempt to create the directory if it doesn't exist
+        crate::debug!("Creating devcert directory at {}...", path.display());
+        create_dir_all(&path, permissions).map_err(|e| e.to_string())?;
     }
 
     if !path.is_dir() {
-        return Err(DirError::Invalid(format!(
+        return Err(format!(
             "Expected a directory but found a file at {}",
             path.display()
-        )));
+        ));
     }
 
     Ok(path)
-}
-
-/// Represents the possible errors that can occur when resolving a directory path.
-pub enum DirError {
-    /// The path does not exist and needs to be created
-    Missing,
-    /// The path exists but is in an unexpected state
-    Invalid(String),
 }
