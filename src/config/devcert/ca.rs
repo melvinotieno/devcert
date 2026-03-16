@@ -47,3 +47,12 @@ pub enum CaRoot {
     /// A dedicated CA per project, stored in the project directory.
     Project,
 }
+
+impl std::fmt::Display for CaRoot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CaRoot::Global => write!(f, "Global"),
+            CaRoot::Project => write!(f, "Project"),
+        }
+    }
+}
