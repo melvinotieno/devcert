@@ -98,6 +98,28 @@ impl LocalAuthority {
         })
     }
 
+    /// Regenerates the CA in `dir`, replacing any existing key and certificate files.
+    pub fn regenerate(dir: &Path, name: Option<&str>) -> Result<Self> {
+        let (key_path, cert_path) = Self::get_paths(dir);
+
+        // Remove existing CA files if they exist
+        if key_path.exists() {
+            fs::remove_file(&key_path).with_context(|| {
+                format!("Failed to remove existing CA key at {}", key_path.display())
+            })?;
+        }
+        if cert_path.exists() {
+            fs::remove_file(&cert_path).with_context(|| {
+                format!(
+                    "Failed to remove existing CA cert at {}",
+                    cert_path.display()
+                )
+            })?;
+        }
+
+        Self::resolve(dir, name)
+    }
+
     /// Validates the CA key and certificate, ensuring they are well-formed and consistent.
     pub fn validate(&self) -> Result<()> {
         // Ensure both files exist before attempting to parse them
