@@ -80,11 +80,27 @@ impl TrustStoreManager {
         }
 
         if enabled("java") {
-            // TODO: Enable Java backend
+            if which::which("keytool").is_ok() {
+                match java::JavaTrustStore::new() {
+                    Ok(store) => backends.push(Box::new(store)),
+                    Err(e) => crate::warn!("Warning: skipping Java trust store — {}", e),
+                }
+            } else {
+                crate::report::warn("Warning: skipping Java trust store — `keytool` not found");
+            }
         }
 
         if enabled("nss") {
-            // TODO: Enable NSS backend
+            if which::which("certutil").is_ok() {
+                match nss::NssTrustStore::new() {
+                    Ok(store) => backends.push(Box::new(store)),
+                    Err(e) => crate::warn!("Warning: skipping NSS trust store — {}", e),
+                }
+            } else {
+                crate::report::warn(
+                    "Warning: skipping NSS trust store — `certutil` not found (install nss-tools)",
+                );
+            }
         }
 
         Ok(Self { backends })
