@@ -9,6 +9,7 @@ mod trust;
 
 pub use ca::CaRoot;
 pub use registry::CertificateAuthority;
+pub use trust::TrustStore;
 
 use std::{env, fs, path::PathBuf};
 
