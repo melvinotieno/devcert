@@ -2,15 +2,14 @@
 //!
 //! A simple CLI tool for generating and managing local development TLS certificates.
 //!
-//! It creates a local Certificate Authority (CA), adds it to the system trust store,
-//! and issues certificates for development domains.
+//! At its core, DevCert provides a local certificate authority (CA) and the ability to generate
+//! leaf certificates signed by that CA. It also includes functionality for managing trust stores,
+//! allowing users to easily add the CA certificate to their system's trusted certificates.
 
 mod cli;
 mod config;
 mod core;
 mod report;
-mod system;
-mod trust;
 
 use clap::Parser;
 
@@ -19,8 +18,8 @@ fn run() -> anyhow::Result<()> {
 }
 
 fn main() {
-    if let Err(e) = run() {
-        report::fatal(&e);
+    if let Err(error) = run() {
+        report::fatal(&error);
         std::process::exit(1);
     }
 }
