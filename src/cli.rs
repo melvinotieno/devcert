@@ -18,8 +18,7 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// Generate a local CA and install it into the system trust stores.
-    Install,
+    Init,
 }
 
 impl Commands {
@@ -30,7 +29,7 @@ impl Commands {
     /// Returns an error if the subcommand fails.
     pub fn execute(&self) -> anyhow::Result<()> {
         match self {
-            Commands::Install => commands::install(),
+            Commands::Init => commands::init(),
         }
     }
 }
