@@ -3,6 +3,6 @@
 //! Each subcommand is defined in its own submodule and re-exported here
 //! for use by the [`super::Commands`] dispatcher.
 
-mod install;
+mod init;
 
-pub use install::install;
+pub use init::init;
