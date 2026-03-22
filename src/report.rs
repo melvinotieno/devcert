@@ -6,7 +6,7 @@
 //!
 //! Each logger has both a function (for plain `&str`) and a macro (for formatted strings):
 //!
-//! ```rust
+//! ```no_run
 //! // Function
 //! info("Certificate generated");
 //!
@@ -52,7 +52,7 @@ pub fn fatal(err: &Error) {
 /// Output is suppressed unless the `DEVCERT_DEBUG` environment variable is set:
 ///
 /// ```bash
-/// DEVCERT_DEBUG=1 devcert init
+/// DEVCERT_DEBUG=true devcert init
 /// ```
 pub fn debug(msg: &str) {
     if std::env::var("DEVCERT_DEBUG").is_ok() {
@@ -62,7 +62,7 @@ pub fn debug(msg: &str) {
 
 /// Prints a formatted success message.
 ///
-/// ```rust
+/// ```no_run
 /// success!("Certificate issued for {}", domain);
 /// ```
 #[macro_export]
@@ -75,7 +75,7 @@ macro_rules! success {
 
 /// Prints a formatted informational message.
 ///
-/// ```rust
+/// ```no_run
 /// info!("Trusting CA for {} domains", count);
 /// ```
 #[macro_export]
@@ -88,7 +88,7 @@ macro_rules! info {
 
 /// Prints a formatted warning message.
 ///
-/// ```rust
+/// ```no_run
 /// warn!("Certificate for {} expires in {} days", domain, days);
 /// ```
 #[macro_export]
@@ -101,7 +101,7 @@ macro_rules! warn {
 
 /// Prints a formatted error message.
 ///
-/// ```rust
+/// ```no_run
 /// error!("Failed to write to {}", path);
 /// ```
 #[macro_export]
@@ -116,7 +116,7 @@ macro_rules! error {
 ///
 /// Output is suppressed unless the `DEVCERT_DEBUG` environment variable is set.
 ///
-/// ```rust
+/// ```no_run
 /// debug!("Resolved config path: {}", path);
 /// ```
 #[macro_export]
