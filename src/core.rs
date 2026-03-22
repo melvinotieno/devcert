@@ -26,8 +26,10 @@ use time::{Duration, OffsetDateTime};
 ///
 /// ```no_run
 /// let (not_before, not_after) = validity_period(365);
+/// assert!(not_after > not_before);
 /// ```
 pub fn validity_period(days: i64) -> (OffsetDateTime, OffsetDateTime) {
+    // Ensure the validity period is positive to avoid generating already-expired certificates.
     assert!(days > 0, "validity period must be positive");
 
     let now = OffsetDateTime::now_utc();
@@ -35,6 +37,39 @@ pub fn validity_period(days: i64) -> (OffsetDateTime, OffsetDateTime) {
     let not_after = now + Duration::days(days);
 
     (not_before, not_after)
+}
+
+/// Converts a string to title case, capitalizing the first letter of each word and separating them with spaces.
+///
+/// Words are split on spaces, underscores, and hyphens. Empty words are ignored.
+///
+/// # Arguments
+////
+/// * `s` - The input string to convert.
+///
+/// # Returns
+///
+/// A new string in title case.
+///
+/// # Example
+///
+/// ```no_run
+/// # use devcert::core::title_case;
+/// assert_eq!(title_case("hello_world"), "Hello World");
+/// assert_eq!(title_case("foo-bar baz"), "Foo Bar Baz");
+/// ```
+pub fn title_case(s: &str) -> String {
+    s.split(|c: char| c == ' ' || c == '_' || c == '-')
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Writes `content` to `path`, creating or truncating the file as needed.
