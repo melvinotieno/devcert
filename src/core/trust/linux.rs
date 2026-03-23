@@ -12,7 +12,7 @@ use std::{
 
 use anyhow::{Context, Result};
 
-impl super::TrustStoreBackend for LinuxTrustStore {
+impl super::TrustBackend for LinuxTrustStore {
     /// Checks if a certificate with the given ID is already trusted.
     fn check(&self, id: &str) -> bool {
         self.cert_path(id).exists()
