@@ -15,6 +15,11 @@ use std::{
 use anyhow::{Context, Result};
 
 impl super::TrustBackend for JavaTrustStore {
+    /// Returns the name of the trust store.
+    fn name(&self) -> &str {
+        "Java"
+    }
+
     /// Returns `true` if the certificate is present in **all** discovered `cacerts` keystores.
     fn check(&self, id: &str) -> bool {
         let alias = Self::alias(id);
