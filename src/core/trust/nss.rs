@@ -16,6 +16,11 @@ use std::{
 use anyhow::{Context, Result};
 
 impl super::TrustBackend for NssTrustStore {
+    /// Returns the name of the trust store.
+    fn name(&self) -> &str {
+        "NSS"
+    }
+
     /// Returns `true` if the certificate is present in **all** discovered NSS databases.
     fn check(&self, id: &str) -> bool {
         if self.db_dirs.is_empty() {
