@@ -1,0 +1,5 @@
+[[cert]]
+name = "devcert"
+domains = ["devcert.localhost", "*.devcert.localhost"]
+key_path = "nginx/certs"
+cert_path = "nginx/certs"
