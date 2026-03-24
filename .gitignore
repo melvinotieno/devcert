@@ -1,5 +1,6 @@
+# Ignore build artifacts
 /target
 
-# DevCert
+# Ignore DevCert artifacts
 .devcert
-.devcert.toml
+nginx/certs
