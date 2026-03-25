@@ -44,17 +44,17 @@ impl LocalAuthority {
     /// Regenerates the CA certificate and private key, replacing any existing files.
     ///
     /// This is useful for resetting the CA if it becomes compromised or if the configuration changes.
-    pub fn regenerate(&self, name: Option<String>) -> Result<CertificateParams> {
-        // Remove existing CA files if they exist
-        if self.key_path.exists() {
-            std::fs::remove_file(&self.key_path).ok();
-        }
-        if self.cert_path.exists() {
-            std::fs::remove_file(&self.cert_path).ok();
-        }
+    // pub fn regenerate(&self, name: Option<String>) -> Result<CertificateParams> {
+    //     // Remove existing CA files if they exist
+    //     if self.key_path.exists() {
+    //         std::fs::remove_file(&self.key_path).ok();
+    //     }
+    //     if self.cert_path.exists() {
+    //         std::fs::remove_file(&self.cert_path).ok();
+    //     }
 
-        self.generate(name)
-    }
+    //     self.generate(name)
+    // }
 
     /// Generates a new CA certificate and private key, and saves them to the specified file paths.
     pub fn generate(&self, name: Option<String>) -> Result<CertificateParams> {

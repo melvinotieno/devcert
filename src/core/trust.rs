@@ -87,13 +87,13 @@ impl TrustManager {
     /// Returns the names of every backend that already trusts the certificate.
     ///
     /// Always checks **all** backends regardless of which stores are enabled.
-    pub fn check(&self, id: &str) -> Vec<String> {
-        self.all
-            .iter()
-            .filter(|b| b.check(id))
-            .map(|b| b.name().to_owned())
-            .collect()
-    }
+    // pub fn check(&self, id: &str) -> Vec<String> {
+    //     self.all
+    //         .iter()
+    //         .filter(|b| b.check(id))
+    //         .map(|b| b.name().to_owned())
+    //         .collect()
+    // }
 
     /// Returns `true` if the certificate is present in enabled backends.
     pub fn installed(&self, id: &str) -> bool {
