@@ -1,20 +1,14 @@
-//! Global configuration management for DevCert.
-//!
-//! This module handles loading and managing the global config file,
-//! which contains user preferences that apply across all projects.
-
 mod ca;
 mod registry;
 mod trust;
-
-pub use ca::CaRoot;
-pub use registry::CertificateAuthority;
-pub use trust::TrustStore;
 
 use std::{env, fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+
+pub use ca::CaRoot;
+pub use trust::TrustStore;
 
 /// Top-level global configuration for DevCert.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,53 +36,48 @@ impl DevCert {
 
     /// Returns `true` if the config file exists on disk.
     pub fn exists() -> bool {
-        Self::config_path()
-            .map(|path| path.exists())
-            .unwrap_or(false)
+        Self::config_path().exists()
     }
 
-    /// Loads the configuration from disk.
-    ///
-    /// Returns the default configuration if the file does not exist yet.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The config directory cannot be determined (see [`DevCert::dir_path`]).
-    /// - The file exists but cannot be read.
-    /// - The file exists but contains invalid TOML or unrecognised fields.
+    /// Creates a new config with the specified CA root mode, without saving to disk.
+    pub fn new(root: CaRoot, auto_trust: bool) -> Self {
+        let mut ca_config = ca::CaConfig::default();
+        let mut trust_config = trust::TrustConfig::default();
+
+        ca_config.root = root;
+        trust_config.auto = auto_trust;
+
+        Self {
+            ca: ca_config,
+            trust: trust_config,
+        }
+    }
+
+    /// Loads the config from disk, or returns a default config if no file exists.
     pub fn load() -> Result<Self> {
-        let path = Self::config_path()?;
+        let path = Self::config_path();
 
         if !path.exists() {
-            return Ok(Self::default());
+            super::create_dir_all(&Self::dir_path(), 0o700)?;
+            return Self::default().save();
         }
 
         let content = fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read config file at {}", path.display()))?;
+            .with_context(|| format!("Failed to read devcert config file at {}", path.display()))?;
 
         toml::from_str(&content)
-            .with_context(|| format!("Failed to parse config file at {}", path.display()))
+            .with_context(|| format!("Failed to parse devcert config file at {}", path.display()))
     }
 
-    /// Serializes the configuration to disk.
-    ///
-    /// Creates the config directory and any missing parent directories if they
-    /// do not already exist.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The config directory cannot be determined (see [`DevCert::dir_path`]).
-    /// - The directory cannot be created.
-    /// - The file cannot be written.
+    /// Saves the config to disk, creating the config directory if it does not exist.
     pub fn save(&self) -> Result<Self> {
-        let path = Self::config_path()?;
+        let path = Self::config_path();
 
-        crate::system::dir::create_dir_all(path.parent().unwrap_or_else(|| path.as_path()), 0o700)
-            .with_context(|| format!("Failed to devcert config directory at {}", path.display()))?;
+        if !path.exists() {
+            super::create_dir_all(&Self::dir_path(), 0o700)?;
+        }
 
-        let content = toml::to_string_pretty(self).context("Failed to serialize config")?;
+        let content = toml::to_string_pretty(self).context("Failed to serialize devcert config")?;
 
         fs::write(&path, content)
             .with_context(|| format!("Failed to write config file at {}", path.display()))?;
@@ -96,16 +85,14 @@ impl DevCert {
         Ok(self.clone())
     }
 
-    /// Loads the CA registry from disk.
-    ///
-    /// Returns an error if the registry file exists but cannot be read or parsed.
+    /// Loads the DevCert CA registry from disk.
     pub fn registry() -> Result<registry::Registry> {
         registry::Registry::load()
     }
 
     /// Returns the full path to the config file (`<dir>/config.toml`).
-    pub fn config_path() -> Result<PathBuf> {
-        Self::dir_path().map(|path| path.join(Self::CONFIG))
+    pub fn config_path() -> PathBuf {
+        Self::dir_path().join(Self::CONFIG)
     }
 
     /// Returns the devcert config directory.
@@ -114,22 +101,20 @@ impl DevCert {
     /// 1. `DEVCERT_HOME` environment variable (if set and non-empty).
     /// 2. `~/.devcert` relative to the current user's home directory.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if neither `DEVCERT_HOME` is set nor the home
-    /// directory can be determined.
-    pub fn dir_path() -> Result<PathBuf> {
+    /// If neither can be determined, prints an error and exits the program.
+    pub fn dir_path() -> PathBuf {
         if let Ok(explicit) = env::var("DEVCERT_HOME") {
-            return Ok(PathBuf::from(explicit));
+            return PathBuf::from(explicit);
         }
 
         if let Some(home) = env::home_dir() {
-            return Ok(home.join(Self::DIR));
+            return home.join(Self::DIR);
         }
 
-        anyhow::bail!(
-            "Could not determine home directory. \
-            Set the DEVCERT_HOME environment variable to an explicit config path to continue."
+        crate::report::error(
+            "Failed to determine home directory for devcert config. Please set the DEVCERT_HOME environment variable to a valid directory path.",
         );
+
+        std::process::exit(1);
     }
 }
