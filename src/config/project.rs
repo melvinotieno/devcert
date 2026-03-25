@@ -55,6 +55,26 @@ impl Project {
         Ok(self.clone())
     }
 
+    pub fn add_app(
+        name: String,
+        domains: Vec<String>,
+        key_path: String,
+        cert_path: String,
+    ) -> Result<()> {
+        let mut config = Self::load()?;
+
+        config.certs.push(cert::CertConfig {
+            name,
+            domains,
+            key_path,
+            cert_path,
+        });
+
+        config.save()?;
+
+        Ok(())
+    }
+
     /// Derives a project ID from the current folder name.
     pub fn derive_id() -> String {
         let folder_name = Self::folder_name();
