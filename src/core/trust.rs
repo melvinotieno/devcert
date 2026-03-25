@@ -149,9 +149,9 @@ impl TrustManager {
 
         #[cfg(target_os = "macos")]
         {
-            use macos::MacOsTrustStore;
+            use macos::MacosTrustStore;
             backends
-                .push(Box::new(MacOsTrustStore::new().context(
+                .push(Box::new(MacosTrustStore::new().context(
                     "Failed to initialize the macOS keychain trust store",
                 )?));
         }
