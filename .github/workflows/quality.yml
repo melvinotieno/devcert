@@ -18,6 +18,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+
       - name: Run formatter
         run: cargo fmt --all -- --check
 
@@ -27,6 +28,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+
       - name: Cache dependencies
         uses: actions/cache@v5
         with:
@@ -35,6 +37,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
@@ -47,6 +50,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+
       - name: Cache dependencies
         uses: actions/cache@v5
         with:
@@ -55,6 +59,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Run tests
         run: cargo test --verbose
 
@@ -67,6 +72,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+
       - name: Cache dependencies
         uses: actions/cache@v5
         with:
@@ -75,5 +81,6 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Run build
         run: cargo build --release --verbose
