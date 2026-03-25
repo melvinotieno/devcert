@@ -18,6 +18,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
+    Install,
+    Uninstall,
     Init,
 }
 
@@ -29,6 +31,8 @@ impl Commands {
     /// Returns an error if the subcommand fails.
     pub fn execute(&self) -> anyhow::Result<()> {
         match self {
+            Commands::Install => commands::install(),
+            Commands::Uninstall => commands::uninstall(),
             Commands::Init => commands::init(),
         }
     }
