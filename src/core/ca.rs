@@ -3,121 +3,86 @@
 //! This module handles the creation and management of the local CA,
 //! which is used to sign leaf certificates for development projects.
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use rcgen::{
-    BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, KeyUsagePurpose,
-};
-use time::OffsetDateTime;
+use rcgen::{CertificateParams, KeyPair, KeyUsagePurpose};
 use x509_parser::{parse_x509_certificate, pem::parse_x509_pem, prelude::X509Certificate};
 
-/// A local Certificate Authority backed by a key/certificate pair stored on disk.
-#[derive(Debug, Clone)]
+/// Manages the creation and resolution of local certificate authorities (CAs) for DevCert.
 pub struct LocalAuthority {
-    /// Path to the CA private key file.
+    /// The file path to the CA's private key.
     key_path: PathBuf,
-    /// Path to the self-signed CA certificate file.
+    /// The file path to the CA's certificate.
     cert_path: PathBuf,
-    /// Common name for the CA certificate.
-    common_name: String,
-    /// Creation date of the CA certificate.
-    created_at: OffsetDateTime,
-    /// Expiry date of the CA certificate.
-    expiry_date: OffsetDateTime,
 }
 
 impl LocalAuthority {
-    const KEY_FILENAME: &'static str = "devcertCA-key.pem";
-    const CERT_FILENAME: &'static str = "devcertCA.pem";
+    /// Creates a new `LocalAuthority` instance with the specified key and certificate paths.
+    pub fn new(dir: &Path) -> Self {
+        Self {
+            key_path: dir.join("devcertCA.key"),
+            cert_path: dir.join("devcertCA.crt"),
+        }
+    }
 
-    /// Returns the path to the CA private key file.
-    pub fn key_path(&self) -> &Path {
+    /// Returns the file path to the CA's private key.
+    pub fn key_path(&self) -> &PathBuf {
         &self.key_path
     }
 
-    /// Returns the path to the CA certificate file.
-    pub fn cert_path(&self) -> &Path {
+    /// Returns the file path to the CA's certificate.
+    pub fn cert_path(&self) -> &PathBuf {
         &self.cert_path
     }
 
-    /// Returns the common name from the CA certificate's subject.
-    pub fn common_name(&self) -> &str {
-        &self.common_name
+    /// Checks if both the CA's private key and certificate files exist.
+    pub fn exists(&self) -> bool {
+        self.key_path.exists() && self.cert_path.exists()
     }
 
-    /// Returns the creation date of the CA certificate.
-    pub fn created_at(&self) -> OffsetDateTime {
-        self.created_at
-    }
-
-    /// Returns the expiry date of the CA certificate.
-    pub fn expiry_date(&self) -> OffsetDateTime {
-        self.expiry_date
-    }
-
-    /// Returns `true` if both the CA key and certificate files exist in `dir`.
-    pub fn exists(dir: &Path) -> bool {
-        let (key_path, cert_path) = Self::get_paths(dir);
-        key_path.exists() && cert_path.exists()
-    }
-
-    /// Resolves the [`LocalAuthority`] in `dir`, generating a new CA if necessary.
-    pub fn resolve(dir: &Path, name: Option<&str>) -> Result<Self> {
-        let (key_path, cert_path) = Self::get_paths(dir);
-
-        // Determine the common name for the CA certificate
-        let common_name = match name {
-            Some(n) => format!("DevCert {} CA", super::utils::title_case(n)),
-            None => "DevCert Global CA".to_string(),
-        };
-
-        let (created_at, expiry_date) = if Self::exists(dir) {
-            let der = Self::read_cert(&cert_path)?;
-            let cert = Self::parse_cert(&der)?;
-
-            (
-                cert.validity().not_before.to_datetime(),
-                cert.validity().not_after.to_datetime(),
-            )
-        } else {
-            crate::system::dir::create_dir_all(dir, 0o700)
-                .with_context(|| format!("Failed to create CA directory at {}", dir.display()))?;
-            Self::generate(&key_path, &cert_path, &common_name)?
-        };
-
-        Ok(Self {
-            key_path,
-            cert_path,
-            common_name,
-            created_at,
-            expiry_date,
-        })
-    }
-
-    /// Regenerates the CA in `dir`, replacing any existing key and certificate files.
-    pub fn regenerate(dir: &Path, name: Option<&str>) -> Result<Self> {
-        let (key_path, cert_path) = Self::get_paths(dir);
-
+    /// Regenerates the CA certificate and private key, replacing any existing files.
+    ///
+    /// This is useful for resetting the CA if it becomes compromised or if the configuration changes.
+    pub fn regenerate(&self, name: Option<String>) -> Result<CertificateParams> {
         // Remove existing CA files if they exist
-        if key_path.exists() {
-            fs::remove_file(&key_path).with_context(|| {
-                format!("Failed to remove existing CA key at {}", key_path.display())
-            })?;
+        if self.key_path.exists() {
+            std::fs::remove_file(&self.key_path).ok();
         }
-        if cert_path.exists() {
-            fs::remove_file(&cert_path).with_context(|| {
-                format!(
-                    "Failed to remove existing CA cert at {}",
-                    cert_path.display()
-                )
-            })?;
+        if self.cert_path.exists() {
+            std::fs::remove_file(&self.cert_path).ok();
         }
 
-        Self::resolve(dir, name)
+        self.generate(name)
+    }
+
+    /// Generates a new CA certificate and private key, and saves them to the specified file paths.
+    pub fn generate(&self, name: Option<String>) -> Result<CertificateParams> {
+        let params = Self::build_params(name);
+
+        let key_pair = KeyPair::generate().context("Failed to generate CA key")?;
+
+        let cert = params
+            .self_signed(&key_pair)
+            .context("Failed to genereate CA certificate")?;
+
+        // Attempt to write the CA key and certificate files, cleaning up any partial files on error
+        let result: Result<()> = (|| {
+            super::write_file(&self.key_path, key_pair.serialize_pem().as_bytes(), 0o400)
+                .with_context(|| "Failed to write CA key")?;
+            super::write_file(&self.cert_path, cert.pem().as_bytes(), 0o644)
+                .with_context(|| "Failed to write CA certificate")?;
+            Ok(())
+        })();
+
+        if result.is_err() {
+            std::fs::remove_file(&self.key_path).ok();
+            std::fs::remove_file(&self.cert_path).ok();
+        }
+
+        result?;
+
+        Ok(params)
     }
 
     /// Validates the CA key and certificate, ensuring they are well-formed and consistent.
@@ -135,7 +100,7 @@ impl LocalAuthority {
         let cert = Self::parse_cert(&der)?;
 
         // Validate the certificate's validity period
-        let now = OffsetDateTime::now_utc();
+        let now = time::OffsetDateTime::now_utc();
         let not_before = cert.validity().not_before.to_datetime();
         let not_after = cert.validity().not_after.to_datetime();
 
@@ -172,7 +137,7 @@ impl LocalAuthority {
         }
 
         // Verify the public key in the certificate matches the derived public key from the private key
-        let key_pem = fs::read_to_string(&self.key_path).context("Failed to read CA key")?;
+        let key_pem = std::fs::read_to_string(&self.key_path).context("Failed to read CA key")?;
         let key_pair = KeyPair::from_pem(&key_pem).context("Failed to parse CA key")?;
         let cert_public_key = &cert.public_key().subject_public_key.data;
         let keypair_public_key = key_pair.public_key_raw();
@@ -184,57 +149,29 @@ impl LocalAuthority {
         Ok(())
     }
 
-    /// Generates a new CA key pair and self-signed certificate.
-    fn generate(
-        key_path: &Path,
-        cert_path: &Path,
-        common_name: &str,
-    ) -> Result<(OffsetDateTime, OffsetDateTime)> {
-        let key_pair = KeyPair::generate().context("Failed to generate CA key pair")?;
-
-        let params = Self::build_params(common_name);
-
-        // Generate a self-signed CA certificate using the parameters and key pair
-        let cert = params
-            .self_signed(&key_pair)
-            .context("Failed to generate CA certificate")?;
-
-        // Write the key and certificate to files
-        let result: Result<()> = (|| {
-            crate::system::file::write_file(key_path, key_pair.serialize_pem().as_bytes(), 0o400)
-                .with_context(|| format!("Failed to write CA key to {key_path:?}"))?;
-            crate::system::file::write_file(cert_path, cert.pem().as_bytes(), 0o644)
-                .with_context(|| format!("Failed to write CA cert to {cert_path:?}"))?;
-            Ok(())
-        })();
-
-        if result.is_err() {
-            // Clean up any files that were created if writing failed
-            let _ = fs::remove_file(key_path);
-            let _ = fs::remove_file(cert_path);
-        }
-
-        result?;
-
-        Ok((params.not_before, params.not_after))
-    }
-
     /// Builds [`CertificateParams`] for a self-signed CA certificate.
-    fn build_params(common_name: &str) -> CertificateParams {
+    fn build_params(name: Option<String>) -> CertificateParams {
         let mut params = CertificateParams::default();
 
+        // Determine the common name for the CA certificate
+        let common_name = match name {
+            Some(n) => format!("DevCert {} CA", super::title_case(&n)),
+            None => "DevCert Global CA".to_string(),
+        };
+
         // Create a new distinguished name for the CA certificate
-        let mut dn = DistinguishedName::new();
-        dn.push(DnType::OrganizationName, "DevCert");
-        dn.push(DnType::CommonName, common_name);
+        let mut dn = rcgen::DistinguishedName::new();
+        dn.push(rcgen::DnType::OrganizationName, "DevCert");
+        dn.push(rcgen::DnType::OrganizationalUnitName, "DevCert CA");
+        dn.push(rcgen::DnType::OrganizationalUnitName, common_name);
         params.distinguished_name = dn;
 
         // Make this certificate a CA that can sign other certificates
-        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
 
-        // Set the validity period for the CA
-        let (not_before, not_after) = super::utils::validity_period(365 * 10);
+        // Set the validity period for the CA certificate (10 years)
+        let (not_before, not_after) = super::validity_period(365 * 10);
         params.not_before = not_before;
         params.not_after = not_after;
 
@@ -250,18 +187,14 @@ impl LocalAuthority {
 
     /// Reads a PEM certificate file and decodes it to raw DER bytes.
     fn read_cert(cert_path: &Path) -> Result<Vec<u8>> {
-        let cert_pem = fs::read_to_string(cert_path).context("Failed to read CA certificate")?;
+        let cert_pem = std::fs::read_to_string(cert_path).context(format!(
+            "Failed to read CA certificate from {}",
+            cert_path.display()
+        ))?;
 
         let (_, pem) = parse_x509_pem(cert_pem.as_bytes())
             .map_err(|e| anyhow::anyhow!("Failed to parse CA certificate PEM: {e}"))?;
 
         Ok(pem.contents)
-    }
-
-    /// Returns the canonical `(key_path, cert_path)` pair for a given directory.
-    fn get_paths(dir: &Path) -> (PathBuf, PathBuf) {
-        let key_path = dir.join(Self::KEY_FILENAME);
-        let cert_path = dir.join(Self::CERT_FILENAME);
-        (key_path, cert_path)
     }
 }
