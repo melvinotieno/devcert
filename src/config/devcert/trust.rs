@@ -108,13 +108,3 @@ pub enum TrustStore {
     /// (from `libnss3-tools`) to be available on `PATH`.
     NSS,
 }
-
-impl std::fmt::Display for TrustStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TrustStore::System => write!(f, "system"),
-            TrustStore::Java => write!(f, "java"),
-            TrustStore::NSS => write!(f, "nss"),
-        }
-    }
-}
