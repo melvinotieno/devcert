@@ -151,7 +151,7 @@ impl TrustManager {
         {
             use macos::MacosTrustStore;
             backends
-                .push(Box::new(MacosTrustStore::new().context(
+                .push(Rc::new(MacosTrustStore::new().context(
                     "Failed to initialize the macOS keychain trust store",
                 )?));
         }
@@ -160,7 +160,7 @@ impl TrustManager {
         {
             use windows::WindowsTrustStore;
             backends
-                .push(Box::new(WindowsTrustStore::new().context(
+                .push(Rc::new(WindowsTrustStore::new().context(
                     "Failed to initialize the Windows root trust store",
                 )?));
         }
