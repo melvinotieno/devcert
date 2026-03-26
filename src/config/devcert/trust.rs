@@ -46,7 +46,7 @@ impl Default for TrustConfig {
     fn default() -> Self {
         Self {
             auto: true,
-            stores: vec![TrustStore::System, TrustStore::Java, TrustStore::NSS],
+            stores: vec![TrustStore::System, TrustStore::Java, TrustStore::Nss],
             java: JavaTrustConfig::default(),
             nss: NssTrustConfig::default(),
         }
@@ -54,7 +54,7 @@ impl Default for TrustConfig {
 }
 
 /// Java-specific trust store options.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct JavaTrustConfig {
     /// Overrides the `JAVA_HOME` directory used to locate the JVM's `cacerts` KeyStore.
@@ -63,28 +63,14 @@ pub struct JavaTrustConfig {
     pub home: Option<String>,
 }
 
-impl Default for JavaTrustConfig {
-    fn default() -> Self {
-        Self { home: None }
-    }
-}
-
 /// NSS-specific trust store options.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NssTrustConfig {
     /// Explicit list of NSS profile directories to install the certificate into.
     ///
     /// When empty, devcert auto-discovers profile directories for Firefox and Chromium-based browsers.
     pub profile_dirs: Vec<String>,
-}
-
-impl Default for NssTrustConfig {
-    fn default() -> Self {
-        Self {
-            profile_dirs: vec![],
-        }
-    }
 }
 
 /// A trust store that devcert can install the CA certificate into.
@@ -106,5 +92,5 @@ pub enum TrustStore {
     ///
     /// Used by Firefox and Chromium-based browsers on Linux. Requires `certutil`
     /// (from `libnss3-tools`) to be available on `PATH`.
-    NSS,
+    Nss,
 }

@@ -13,19 +13,11 @@ use time::OffsetDateTime;
 use crate::config::devcert::CaRoot;
 
 /// Persistent registry of Certificate Authorities managed by devcert.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Registry {
     /// List of all CAs created by devcert.
     authorities: Vec<CertificateAuthority>,
-}
-
-impl Default for Registry {
-    fn default() -> Self {
-        Self {
-            authorities: Vec::new(),
-        }
-    }
 }
 
 impl Registry {

@@ -11,22 +11,13 @@ pub use ca::CaRoot;
 pub use trust::TrustStore;
 
 /// Top-level global configuration for DevCert.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DevCert {
     /// CA configuration.
     pub ca: ca::CaConfig,
     /// Trust store configuration.
     pub trust: trust::TrustConfig,
-}
-
-impl Default for DevCert {
-    fn default() -> Self {
-        Self {
-            ca: ca::CaConfig::default(),
-            trust: trust::TrustConfig::default(),
-        }
-    }
 }
 
 impl DevCert {

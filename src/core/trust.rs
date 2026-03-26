@@ -84,9 +84,9 @@ impl TrustManager {
         Ok(Self { all, enabled })
     }
 
-    /// Returns the names of every backend that already trusts the certificate.
-    ///
-    /// Always checks **all** backends regardless of which stores are enabled.
+    // /// Returns the names of every backend that already trusts the certificate.
+    // ///
+    // /// Always checks **all** backends regardless of which stores are enabled.
     // pub fn check(&self, id: &str) -> Vec<String> {
     //     self.all
     //         .iter()
@@ -194,7 +194,7 @@ impl MatchesBackend for TrustStore {
     fn matches_backend(&self, backend: &dyn TrustBackend) -> bool {
         matches!(
             (self, backend.name()),
-            (TrustStore::System, "System") | (TrustStore::Java, "Java") | (TrustStore::NSS, "NSS")
+            (TrustStore::System, "System") | (TrustStore::Java, "Java") | (TrustStore::Nss, "NSS")
         )
     }
 }
