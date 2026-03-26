@@ -33,7 +33,7 @@ pub fn init() -> Result<()> {
     let trust_manager = TrustManager::new(&devcert.trust.stores)?;
 
     if !trust_manager.installed(&id) {
-        trust_manager.install(&id, &ca.cert_path())?;
+        trust_manager.install(&id, ca.cert_path())?;
     }
 
     let sans = generate_project_config(Project::folder_name())?;

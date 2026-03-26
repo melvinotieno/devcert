@@ -48,7 +48,7 @@ fn global_install() -> Result<()> {
         crate::report::info("CA already installed in trust store.");
     } else {
         crate::report::info("Installing CA into trust store...");
-        trust_manager.install(&cert_id, &ca.cert_path())?;
+        trust_manager.install(&cert_id, ca.cert_path())?;
     }
 
     Ok(())
