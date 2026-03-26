@@ -44,7 +44,7 @@ pub fn validity_period(days: i64) -> (OffsetDateTime, OffsetDateTime) {
 /// Words are split on spaces, underscores, and hyphens. Empty words are ignored.
 ///
 /// # Arguments
-////
+///
 /// * `s` - The input string to convert.
 ///
 /// # Returns
@@ -59,7 +59,7 @@ pub fn validity_period(days: i64) -> (OffsetDateTime, OffsetDateTime) {
 /// assert_eq!(title_case("foo-bar baz"), "Foo Bar Baz");
 /// ```
 pub fn title_case(s: &str) -> String {
-    s.split(|c: char| c == ' ' || c == '_' || c == '-')
+    s.split(|c: char| [' ', '_', '-'].contains(&c))
         .filter(|word| !word.is_empty())
         .map(|word| {
             let mut chars = word.chars();
@@ -78,8 +78,7 @@ pub fn title_case(s: &str) -> String {
 ///
 /// * `path` - The path to write the file to.
 /// * `content` - The raw bytes to write.
-/// * `mode` - Unix permission bits (e.g. `0o600` for private keys, `0o644` for certificates).
-///            Ignored on non-Unix platforms.
+/// * `mode` - Unix permission bits (e.g. `0o600` for private keys, `0o644` for certificates). Ignored on non-Unix platforms.
 ///
 /// # Errors
 ///

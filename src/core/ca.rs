@@ -41,9 +41,9 @@ impl LocalAuthority {
         self.key_path.exists() && self.cert_path.exists()
     }
 
-    /// Regenerates the CA certificate and private key, replacing any existing files.
-    ///
-    /// This is useful for resetting the CA if it becomes compromised or if the configuration changes.
+    // /// Regenerates the CA certificate and private key, replacing any existing files.
+    // ///
+    // /// This is useful for resetting the CA if it becomes compromised or if the configuration changes.
     // pub fn regenerate(&self, name: Option<String>) -> Result<CertificateParams> {
     //     // Remove existing CA files if they exist
     //     if self.key_path.exists() {

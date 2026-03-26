@@ -21,7 +21,6 @@ use anyhow::Result;
 ///
 /// * `path` - The directory path to create.
 /// * `mode` - The Unix permission bits to set on the resulting directory (e.g. `0o755`).
-///            Only applies to the final directory, not any intermediate parents.
 ///
 /// # Errors
 ///
