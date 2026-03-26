@@ -146,10 +146,11 @@ impl NssTrustStore {
             for entry in entries.flatten() {
                 let path = entry.path();
 
-                if path.is_dir() && Self::is_nss_dir(&path) {
-                    if let Some(db) = Self::classify(&path) {
-                        databases.push(db);
-                    }
+                if path.is_dir()
+                    && Self::is_nss_dir(&path)
+                    && let Some(db) = Self::classify(&path)
+                {
+                    databases.push(db);
                 }
             }
         }

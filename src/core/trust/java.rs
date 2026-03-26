@@ -130,10 +130,10 @@ impl JavaTrustStore {
             }
         }
 
-        if let Some(java_bin) = Self::find_java_on_path() {
-            if let Some(jre_root) = java_bin.parent().and_then(|p| p.parent()) {
-                roots.push(jre_root.to_owned());
-            }
+        if let Some(java_bin) = Self::find_java_on_path()
+            && let Some(jre_root) = java_bin.parent().and_then(|p| p.parent())
+        {
+            roots.push(jre_root.to_owned());
         }
 
         let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
