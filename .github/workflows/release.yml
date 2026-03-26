@@ -91,6 +91,8 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           path: artifacts
+          pattern: devcert-*
+          merge-multiple: true
 
       - name: Generate checksums
         run: |
