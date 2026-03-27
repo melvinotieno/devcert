@@ -4,7 +4,6 @@
 //! detected at runtime by probing well-known certificate directories.
 
 use std::{
-    fs,
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -13,34 +12,52 @@ use std::{
 use anyhow::{Context, Result};
 
 impl super::TrustBackend for LinuxTrustStore {
-    /// Checks if a certificate with the given ID is already trusted.
     fn check(&self, id: &str) -> bool {
         self.cert_path(id).exists()
     }
 
-    /// Installs the certificate at `cert_path` into the system trust store.
     fn install(&self, id: &str, cert_path: &Path) -> Result<()> {
         if self.check(id) {
+            crate::debug!("Certificate {:?} already present, skipping install", id);
             return Ok(());
         }
 
-        let cert_content = fs::read(cert_path)
-            .with_context(|| format!("Failed to read certificate from {:?}", cert_path))?;
+        let cert_content = std::fs::read(cert_path)
+            .with_context(|| format!("Could not read the certificate from {:?}", cert_path))?;
 
-        self.sudo_write(&self.cert_path(id), &cert_content)?;
-        self.refresh_trust_store()?;
+        if !self.sudo_write(&self.cert_path(id), &cert_content) {
+            anyhow::bail!("Failed to install certificate in the linux trust store");
+        }
+
+        if !self.refresh_trust_store() {
+            anyhow::bail!(
+                "Failed to refresh the linux trust store after installation. Run manually with: sudo {}",
+                self.distro.command.join(" ")
+            );
+        }
 
         Ok(())
     }
 
-    /// Removes the certificate with the given ID from the system store.
     fn uninstall(&self, id: &str) -> Result<()> {
         if !self.check(id) {
+            crate::debug!("Certificate {:?} not present, skipping uninstall", id);
             return Ok(());
         }
 
-        self.sudo_run(&["rm", "-f", &self.cert_path(id).to_string_lossy()])?;
-        self.refresh_trust_store()?;
+        let path = self.cert_path(id);
+        let path_str = path.to_string_lossy();
+
+        if !self.sudo_run(&["rm", "-f", &path_str]) {
+            anyhow::bail!("Failed to uninstall certificate from the linux trust store");
+        }
+
+        if !self.refresh_trust_store() {
+            anyhow::bail!(
+                "Failed to refresh the linux trust store after uninstallation. Run manually with: sudo {}",
+                self.distro.command.join(" ")
+            );
+        }
 
         Ok(())
     }
@@ -60,54 +77,93 @@ impl LinuxTrustStore {
         })
     }
 
-    /// Constructs the full path for a certificate with the given ID.
+    /// Constructs the expected certificate path using the given certificate ID.
     fn cert_path(&self, id: &str) -> PathBuf {
-        Path::new(self.distro.cert_dir).join(format!("devcert-{}.{}", id, self.distro.cert_ext))
+        Path::new(self.distro.cert_dir).join(format!("{}.{}", id, self.distro.cert_ext))
     }
 
     /// Runs the distribution's trust store refresh command.
-    fn refresh_trust_store(&self) -> Result<()> {
-        self.sudo_run(self.distro.command)
-            .context("Failed to refresh the system trust store")
+    fn refresh_trust_store(&self) -> bool {
+        if !self.sudo_run(self.distro.command) {
+            crate::debug!("Failed to refresh the system trust store");
+            return false;
+        }
+        true
     }
 
-    /// Runs a command with `sudo`, returning an error if it fails.
-    fn sudo_run(&self, args: &[&str]) -> Result<()> {
-        let status = Command::new("sudo")
-            .args(args)
-            .status()
-            .with_context(|| format!("Failed to run: sudo {}", args.join(" ")))?;
+    /// Runs a command with `sudo`, returning `true` if it succeeds, `false` otherwise.
+    fn sudo_run(&self, args: &[&str]) -> bool {
+        let output = match Command::new("sudo").args(args).output() {
+            Ok(o) => o,
+            Err(e) => {
+                crate::debug!("Failed to spawn: sudo {} — {}", args.join(" "), e);
+                return false;
+            }
+        };
 
-        if !status.success() {
-            anyhow::bail!("Command failed: sudo {}", args.join(" "));
+        if !output.status.success() {
+            crate::debug!(
+                "sudo {} failed (status {:?}):\n{}",
+                args.join(" "),
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return false;
         }
 
-        Ok(())
+        true
     }
 
     /// Writes `content` to `dest` via `sudo tee`, avoiding a temp-file copy.
-    fn sudo_write(&self, dest: &Path, content: &[u8]) -> Result<()> {
-        let mut child = Command::new("sudo")
+    fn sudo_write(&self, dest: &Path, content: &[u8]) -> bool {
+        let mut child = match Command::new("sudo")
             .args(["tee", &dest.to_string_lossy()])
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
-            .context("Failed to spawn sudo tee — is sudo available?")?;
+        {
+            Ok(c) => c,
+            Err(e) => {
+                crate::debug!("Failed to spawn sudo tee: {}", e);
+                return false;
+            }
+        };
 
-        child
-            .stdin
-            .take()
-            .context("Could not open stdin for sudo tee")?
-            .write_all(content)
-            .context("Failed to pipe certificate content to sudo tee")?;
+        // Write the certificate content to the stdin of `sudo tee`.
+        {
+            let stdin = match child.stdin.as_mut() {
+                Some(s) => s,
+                None => {
+                    crate::debug!("Failed to open stdin for sudo tee");
+                    return false;
+                }
+            };
 
-        let status = child.wait().context("sudo tee exited unexpectedly")?;
-
-        if !status.success() {
-            anyhow::bail!("sudo tee failed — do you have the required privileges?");
+            if let Err(e) = stdin.write_all(content) {
+                crate::debug!("Failed to write certificate content to sudo tee: {}", e);
+                return false;
+            }
         }
 
-        Ok(())
+        let output = match child.wait_with_output() {
+            Ok(o) => o,
+            Err(e) => {
+                crate::debug!("Failed while waiting for sudo tee to finish: {}", e);
+                return false;
+            }
+        };
+
+        if !output.status.success() {
+            crate::debug!(
+                "sudo tee failed (status {:?}):\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return false;
+        }
+
+        true
     }
 }
 
@@ -158,7 +214,7 @@ impl Distro {
             .copied()
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "Automatic trust store management is not supported on this Linux distribution"
+                    "Automatic trust store management is not yet supported on this Linux distribution"
                 )
             })
     }
