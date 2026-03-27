@@ -3,4 +3,3 @@
 
 # Ignore DevCert artifacts
 .devcert
-nginx/certs

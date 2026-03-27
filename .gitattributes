@@ -1,4 +1,4 @@
 .devcert.toml linguist-detectable=false
 compose.yaml linguist-detectable=false
 install.sh linguist-detectable=false
-nginx/default.conf linguist-detectable=false
+nginx.conf linguist-detectable=false

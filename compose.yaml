@@ -3,8 +3,9 @@ services:
   nginx:
     image: nginx
     volumes:
-      - ./nginx/certs:/etc/nginx/certs
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./.devcert/devcert.crt:/etc/nginx/certs/devcert.crt:ro
+      - ./.devcert/devcert.key:/etc/nginx/certs/devcert.key:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
       - "80:80"
       - "443:443"
