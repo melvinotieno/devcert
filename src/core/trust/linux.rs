@@ -71,9 +71,13 @@ pub struct LinuxTrustStore {
 
 impl LinuxTrustStore {
     /// Detects the Linux distribution and initializes the trust store.
-    pub fn new() -> Result<Self> {
+    pub fn new(
+        dir: Option<String>,
+        ext: Option<String>,
+        exec: Option<Vec<String>>,
+    ) -> Result<Self> {
         Ok(Self {
-            distro: Distro::detect()?,
+            distro: Distro::detect(dir, ext, exec)?,
         })
     }
 
@@ -130,7 +134,7 @@ impl LinuxTrustStore {
             }
         };
 
-        // Write the certificate content to the stdin of `sudo tee`.
+        // Write the certificate content to the stdin of `sudo tee`
         {
             let stdin = match child.stdin.as_mut() {
                 Some(s) => s,
@@ -180,7 +184,22 @@ struct Distro {
 
 impl Distro {
     /// Detects the current Linux distribution by probing well-known certificate directories.
-    fn detect() -> Result<Self> {
+    ///
+    /// If `dir`, `ext`, and `exec` are all provided, uses them directly without probing.
+    fn detect(dir: Option<String>, ext: Option<String>, exec: Option<Vec<String>>) -> Result<Self> {
+        // If all overrides are provided, use them directly without probing.
+        if let (Some(cert_dir), Some(cert_ext), Some(command)) = (dir, ext, exec) {
+            return Ok(Self {
+                cert_dir: cert_dir.leak(),
+                cert_ext: cert_ext.leak(),
+                command: command
+                    .into_iter()
+                    .map(|s| s.leak() as &'static str)
+                    .collect::<Vec<_>>()
+                    .leak(),
+            });
+        }
+
         const DISTROS: &[Distro] = &[
             // Arch-based
             Distro {
