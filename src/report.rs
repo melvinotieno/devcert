@@ -56,7 +56,7 @@ pub fn fatal(err: &Error) {
 /// ```
 pub fn debug(msg: &str) {
     if std::env::var("DEVCERT_DEBUG").is_ok() {
-        eprintln!("{}", msg.cyan().bold());
+        eprintln!("{}", format!("[DEBUG] {}", msg).cyan().bold());
     }
 }
 
@@ -124,7 +124,7 @@ macro_rules! debug {
     ($($arg:tt)*) => {{
         use colored::Colorize;
         if std::env::var("DEVCERT_DEBUG").is_ok() {
-            eprintln!("{}", format!($($arg)*).cyan().bold())
+            eprintln!("{}", format!("[DEBUG] {}", format!($($arg)*)).cyan().bold())
         }
     }};
 }
