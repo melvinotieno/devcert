@@ -7,77 +7,74 @@
 //! Note: Modifying the `cacerts` keystore typically requires administrative privileges, so
 //! users may need to run DevCert with elevated permissions for these operations to succeed.
 
-use std::{
-    path::{Path, PathBuf},
-    process::{Command, Stdio},
-};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
+
+const CACERTS_PASSWORD: &str = "changeit";
 
 impl super::TrustBackend for JavaTrustStore {
-    /// Returns the name of the trust store.
-    fn name(&self) -> &str {
-        "Java"
-    }
-
-    /// Returns `true` if the certificate is present in **all** discovered `cacerts` keystores.
     fn check(&self, id: &str) -> bool {
         let alias = Self::alias(id);
-        self.cacerts_paths
-            .iter()
-            .all(|p| Self::alias_exists_in(p, &alias))
+
+        self.exec_keytool(&[
+            "-list",
+            "-cacerts",
+            "-storepass",
+            CACERTS_PASSWORD,
+            "-alias",
+            alias.as_str(),
+        ])
     }
 
-    /// Installs the certificate into every discovered `cacerts` keystore.
-    ///
-    /// Keystores that already contain the certificate are skipped.
-    /// Failures across individual keystores are aggregated into a single error.
     fn install(&self, id: &str, cert_path: &Path) -> Result<()> {
-        let alias = Self::alias(id);
-        let mut errors: Vec<String> = Vec::new();
-
-        for cacerts in &self.cacerts_paths {
-            if Self::alias_exists_in(cacerts, &alias) {
-                continue;
-            }
-
-            if let Err(e) = Self::import_into(cacerts, cert_path, &alias) {
-                errors.push(format!("{} — {:?}", e, cacerts));
-            }
+        if self.check(id) {
+            crate::debug!("Certificate {:?} already present, skipping install", id);
+            return Ok(());
         }
 
-        if !errors.is_empty() {
-            anyhow::bail!(
-                "Failed to install certificate into {} Java keystore(s):\n{}",
-                errors.len(),
-                errors.join("\n")
-            );
+        let alias = Self::alias(id);
+        let cert_file = &cert_path.to_string_lossy();
+
+        let args = [
+            "-importcert",
+            "-cacerts",
+            "-storepass",
+            CACERTS_PASSWORD,
+            "-file",
+            cert_file,
+            "-alias",
+            alias.as_str(),
+            "-noprompt",
+        ];
+
+        if !self.exec_keytool(&args) {
+            anyhow::bail!("Failed to install certificate into Java cacerts keystore");
         }
 
         Ok(())
     }
 
-    /// Removes the certificate from every `cacerts` keystore that contains it.
     fn uninstall(&self, id: &str) -> Result<()> {
-        let alias = Self::alias(id);
-        let mut errors: Vec<String> = Vec::new();
-
-        for cacerts in &self.cacerts_paths {
-            if !Self::alias_exists_in(cacerts, &alias) {
-                continue;
-            }
-
-            if let Err(e) = Self::delete_from(cacerts, &alias) {
-                errors.push(format!("{} — {:?}", e, cacerts));
-            }
+        if !self.check(id) {
+            crate::debug!("Certificate {:?} not present, skipping uninstall", id);
+            return Ok(());
         }
 
-        if !errors.is_empty() {
-            anyhow::bail!(
-                "Failed to remove certificate from {} Java keystore(s):\n{}",
-                errors.len(),
-                errors.join("\n")
-            );
+        let alias = Self::alias(id);
+
+        let args = [
+            "-delete",
+            "-cacerts",
+            "-storepass",
+            CACERTS_PASSWORD,
+            "-alias",
+            alias.as_str(),
+        ];
+
+        if !self.exec_keytool(&args) {
+            anyhow::bail!("Failed to uninstall certificate from Java cacerts keystore");
         }
 
         Ok(())
@@ -86,180 +83,258 @@ impl super::TrustBackend for JavaTrustStore {
 
 /// Trust store implementation for Java (`cacerts` keystore).
 pub struct JavaTrustStore {
-    cacerts_paths: Vec<PathBuf>,
+    /// The root path of the Java installation (JAVA_HOME).
+    java_home: PathBuf,
+    /// The path to the `cacerts` keystore file.
+    cacerts_path: PathBuf,
+    /// The path to the `keytool` executable.
+    keytool_path: PathBuf,
 }
 
-const CACERTS_PASSWORD: &str = "changeit";
-
 impl JavaTrustStore {
-    /// Discovers Java installations and initializes the trust store handle.
-    pub fn new() -> Result<Self> {
-        let cacerts_paths = Self::discover_cacerts();
-
-        if cacerts_paths.is_empty() {
-            anyhow::bail!(
-                "No Java installation found. Set JAVA_HOME or ensure `java` is on your PATH."
-            );
+    /// Creates a new instance of `JavaTrustStore` by discovering the Java installation and its tools.
+    pub fn new(home: Option<String>) -> Result<Self> {
+        if let Some((java_home, cacerts, keytool)) = Self::discover(home) {
+            return Ok(Self {
+                java_home,
+                cacerts_path: cacerts,
+                keytool_path: keytool,
+            });
         }
 
-        Ok(Self { cacerts_paths })
+        anyhow::bail!(
+            "Java installation not found or is invalid. Set `trust.java.home` in your config, \
+            set the JAVA_HOME environment variable, or ensure `java` is available on your PATH"
+        );
     }
 
-    /// Generates a consistent alias for the certificate based on its ID.
+    /// Generates a normalized alias for the certificate based on its ID.
     fn alias(id: &str) -> String {
-        format!("devcert-{}", id)
+        let normalized = id.replace(['-', '_', ' '], "");
+        format!("{}ca", normalized.to_lowercase())
     }
 
-    /// Discovers potential `cacerts` keystore paths by checking environment variables,
-    /// common installation directories, and the system `PATH` for Java executables.
-    fn discover_cacerts() -> Vec<PathBuf> {
-        let mut roots: Vec<PathBuf> = Vec::new();
+    /// Discovers the Java installation and its relevant tools (cacerts and keytool) using the following priority:
+    /// 1. Configured Java home (from config)
+    /// 2. JAVA_HOME environment variable
+    /// 3. Java executable on system PATH
+    fn discover(home: Option<String>) -> Option<(PathBuf, PathBuf, PathBuf)> {
+        // Priority 1: Use configured Java home if provided
+        if let Some(home_path) = home {
+            crate::debug!("Using configured Java home: {:?}", home_path);
 
-        if let Ok(home) = std::env::var("JAVA_HOME") {
-            roots.push(PathBuf::from(home));
-        }
-
-        for link in &[
-            "/usr/lib/jvm/default",
-            "/usr/lib/jvm/default-java",
-            "/usr/lib/jvm/default-runtime",
-        ] {
-            let p = PathBuf::from(link);
-            if p.exists() {
-                roots.push(p);
+            if let Some((cacerts, keytool)) = Self::find_tools(&home_path) {
+                return Some((PathBuf::from(home_path), cacerts, keytool));
+            } else {
+                crate::report::debug("No valid Java tools found in configured Java home");
             }
+        } else {
+            crate::report::debug("No configured Java home provided");
         }
 
-        if let Some(java_bin) = Self::find_java_on_path()
-            && let Some(jre_root) = java_bin.parent().and_then(|p| p.parent())
-        {
-            roots.push(jre_root.to_owned());
+        // Priority 2: Check JAVA_HOME environment variable
+        if let Ok(env_home) = std::env::var("JAVA_HOME") {
+            crate::debug!("JAVA_HOME environment variable points to: {:?}", env_home);
+
+            if let Some((cacerts, keytool)) = Self::find_tools(&env_home) {
+                return Some((PathBuf::from(env_home), cacerts, keytool));
+            } else {
+                crate::report::debug("No valid Java tools found in JAVA_HOME");
+            }
+        } else {
+            crate::report::debug("Environment variable JAVA_HOME not set");
         }
 
-        let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-        let mut result = Vec::new();
+        // Priority 3: Find Java executable on PATH and resolve to root
+        if let Some(java_bin) = Self::find_java() {
+            if let Some(jre_root) = java_bin.parent().and_then(|p| p.parent()) {
+                crate::debug!("Found Java installation via PATH: {:?}", jre_root);
 
-        for root in roots {
-            for relative in &["lib/security/cacerts", "jre/lib/security/cacerts"] {
-                let candidate = root.join(relative);
-                if candidate.exists() {
-                    let canonical = candidate
-                        .canonicalize()
-                        .unwrap_or_else(|_| candidate.clone());
-                    if seen.insert(canonical) {
-                        result.push(candidate);
-                    }
+                if let Some((cacerts, keytool)) = Self::find_tools(jre_root.to_str()?) {
+                    return Some((PathBuf::from(jre_root), cacerts, keytool));
+                } else {
+                    crate::report::debug("No valid Java tools found in PATH-resolved Java home");
                 }
             }
+        } else {
+            crate::report::debug("No Java installation found on PATH");
         }
 
-        result
+        None
     }
 
-    /// Attempts to find the `java` executable on the system `PATH`.
-    fn find_java_on_path() -> Option<PathBuf> {
-        let tool = if cfg!(target_os = "windows") {
-            "where"
-        } else {
-            "which"
+    /// Executes a `keytool` command with the given arguments and returns whether it succeeded.
+    fn exec_keytool(&self, args: &[&str]) -> bool {
+        let mut cmd = Command::new(&self.keytool_path);
+        cmd.args(args);
+
+        let (combined, result) = self.keytool_command(&mut cmd);
+
+        let output = match result {
+            Ok(o) => o,
+            Err(e) => {
+                crate::debug!("Failed to execute keytool: {}", e);
+                return false;
+            }
         };
 
-        let output = Command::new(tool)
-            .arg("java")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
-            .ok()?;
-
-        if !output.status.success() {
-            return None;
+        if output.status.success() {
+            return true;
         }
 
-        let line = std::str::from_utf8(&output.stdout)
-            .ok()?
-            .lines()
-            .next()?
+        // `-cacerts` was introduced in Java 9. On older versions, keytool will
+        // report an illegal option error, hence, fall back to `-keystore <path>`
+        if combined.contains("Illegal option: -cacerts") {
+            crate::report::debug("keytool lacks -cacerts (pre-Java 9), retrying with -keystore");
+            return self.exec_keytool_legacy(args);
+        }
+
+        false
+    }
+
+    /// Rewrites `-cacerts` to `-keystore <path> -storepass <pass>` for pre-Java 9.
+    fn exec_keytool_legacy(&self, args: &[&str]) -> bool {
+        let cacerts = &self.cacerts_path.to_string_lossy();
+
+        // Replace the `-cacerts` flag with `-keystore <path> -storepass <pass>`.
+        let legacy_args: Vec<&str> = args
+            .iter()
+            .flat_map(|&a| {
+                if a == "-cacerts" {
+                    vec!["-keystore", cacerts]
+                } else {
+                    vec![a]
+                }
+            })
+            .collect();
+
+        crate::debug!("Retrying keytool with legacy -keystore args");
+
+        let mut cmd = Command::new(&self.keytool_path);
+        cmd.args(&legacy_args);
+
+        let (_combined, result) = self.keytool_command(&mut cmd);
+
+        result.map(|o| o.status.success()).unwrap_or_else(|e| {
+            crate::debug!("Failed to execute keytool (legacy): {}", e);
+            false
+        })
+    }
+
+    /// Executes a `keytool` command and returns the combined stdout/stderr output along with the result.
+    fn keytool_command(&self, cmd: &mut Command) -> (String, std::io::Result<Output>) {
+        let output = cmd.output();
+
+        if let Ok(ref res) = output {
+            let args: Vec<_> = cmd.get_args().collect();
+
+            crate::debug!("keytool command args:\n{:?}", args);
+
+            // Combine stdout and stderr for better error analysis
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&res.stdout),
+                String::from_utf8_lossy(&res.stderr)
+            )
             .trim()
-            .to_owned();
+            .to_string();
 
-        let path = PathBuf::from(&line);
+            crate::debug!("keytool command output:\n{}", combined);
+
+            // On unix, if the failure is a FileNotFoundException, it likely means we don't
+            // have permissions to use keytool, therefore, retry the same command with sudo
+            #[cfg(unix)]
+            if !res.status.success() && combined.contains("java.io.FileNotFoundException") {
+                crate::report::debug(
+                    "keytool failed with FileNotFoundException, retrying with sudo",
+                );
+
+                let mut sudo_cmd = Command::new("sudo");
+
+                // Preserve JAVA_HOME in the environment for the sudo command
+                sudo_cmd
+                    .arg("env")
+                    .arg(format!("JAVA_HOME={}", self.java_home.display()))
+                    .arg(&self.keytool_path)
+                    .args(args);
+
+                let sudo_output = sudo_cmd.output();
+
+                return match sudo_output {
+                    Ok(sudo_res) => {
+                        let sudo_combined = format!(
+                            "{}{}",
+                            String::from_utf8_lossy(&sudo_res.stdout),
+                            String::from_utf8_lossy(&sudo_res.stderr)
+                        )
+                        .trim()
+                        .to_string();
+
+                        crate::debug!("sudo keytool command output:\n{}", sudo_combined);
+
+                        (sudo_combined, Ok(sudo_res))
+                    }
+                    Err(e) => {
+                        crate::debug!("Failed to execute sudo keytool: {}", e);
+                        (String::new(), Err(e))
+                    }
+                };
+            }
+
+            return (combined, output);
+        }
+
+        (String::new(), output)
+    }
+
+    /// Finds the `cacerts` and `keytool` paths within a given Java home directory.
+    fn find_tools(root: &str) -> Option<(PathBuf, PathBuf)> {
+        let cacerts = Self::find_cacerts(root)?;
+        let keytool = Self::find_keytool(root)?;
+
+        Some((cacerts, keytool))
+    }
+
+    /// Finds the path to the `cacerts` keystore within the Java installation.
+    fn find_cacerts(root: &str) -> Option<PathBuf> {
+        let root_path = PathBuf::from(root);
+
+        for relative in &["lib/security/cacerts", "jre/lib/security/cacerts"] {
+            let candidate = root_path.join(relative);
+
+            if candidate.exists() {
+                crate::debug!("Found cacerts keystore at: {:?}", candidate);
+                return Some(candidate);
+            } else {
+                crate::debug!("No cacerts keystore found at: {:?}", candidate);
+            }
+        }
+
+        None
+    }
+
+    /// Finds the path to the `keytool` executable within the Java installation.
+    fn find_keytool(root: &str) -> Option<PathBuf> {
+        let keytool = if cfg!(target_os = "windows") {
+            "keytool.exe"
+        } else {
+            "keytool"
+        };
+
+        let candidate = PathBuf::from(root).join("bin").join(keytool);
+
+        if candidate.exists() {
+            crate::debug!("Found keytool at: {:?}", candidate);
+            candidate.canonicalize().ok().or(Some(candidate))
+        } else {
+            crate::debug!("No keytool found at: {:?}", candidate);
+            None
+        }
+    }
+
+    /// Finds the path to the Java executable.
+    fn find_java() -> Option<PathBuf> {
+        let path = which::which("java").ok()?;
         path.canonicalize().ok().or(Some(path))
-    }
-
-    /// Checks if the given alias exists in the specified `cacerts` keystore.
-    fn alias_exists_in(cacerts: &Path, alias: &str) -> bool {
-        Command::new("keytool")
-            .args([
-                "-list",
-                "-alias",
-                alias,
-                "-keystore",
-                &cacerts.to_string_lossy(),
-                "-storepass",
-                CACERTS_PASSWORD,
-                "-noprompt",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
-
-    /// Imports the certificate into the specified `cacerts` keystore with the given alias.
-    fn import_into(cacerts: &Path, cert_path: &Path, alias: &str) -> Result<()> {
-        let status = Command::new("keytool")
-            .args([
-                "-importcert",
-                "-trustcacerts",
-                "-alias",
-                alias,
-                "-keystore",
-                &cacerts.to_string_lossy(),
-                "-storepass",
-                CACERTS_PASSWORD,
-                "-file",
-                &cert_path.to_string_lossy(),
-                "-noprompt",
-            ])
-            .stdout(Stdio::null())
-            .status()
-            .context("Failed to run keytool -importcert — is Java installed?")?;
-
-        if !status.success() {
-            anyhow::bail!(
-                "keytool -importcert failed for {:?} — do you have write permission?",
-                cacerts
-            );
-        }
-
-        Ok(())
-    }
-
-    /// Deletes the certificate with the given alias from the specified `cacerts` keystore.
-    fn delete_from(cacerts: &Path, alias: &str) -> Result<()> {
-        let status = Command::new("keytool")
-            .args([
-                "-delete",
-                "-alias",
-                alias,
-                "-keystore",
-                &cacerts.to_string_lossy(),
-                "-storepass",
-                CACERTS_PASSWORD,
-                "-noprompt",
-            ])
-            .stdout(Stdio::null())
-            .status()
-            .context("Failed to run keytool -delete")?;
-
-        if !status.success() {
-            anyhow::bail!(
-                "keytool -delete failed for {:?} — do you have write permission?",
-                cacerts
-            );
-        }
-
-        Ok(())
     }
 }
