@@ -16,30 +16,20 @@ use std::{
 use anyhow::{Context, Result};
 
 impl super::TrustBackend for NssTrustStore {
-    /// Returns the name of the trust store.
-    fn name(&self) -> &str {
-        "NSS"
-    }
-
-    /// Returns `true` if the certificate is present in **all** discovered NSS databases.
     fn check(&self, id: &str) -> bool {
-        if self.db_dirs.is_empty() {
+        if self.profiles.is_empty() {
             return true;
         }
 
         let nickname = Self::cert_nickname(id);
-        self.db_dirs.iter().all(|db| Self::is_in_db(db, &nickname))
+        self.profiles.iter().all(|db| Self::is_in_db(db, &nickname))
     }
 
-    /// Installs the certificate into every discovered NSS database.
-    ///
-    /// Databases where the certificate is already present are skipped.
-    /// Failures across individual databases are aggregated into a single error.
     fn install(&self, id: &str, cert_path: &Path) -> Result<()> {
         let nickname = Self::cert_nickname(id);
         let mut errors: Vec<String> = Vec::new();
 
-        for db in &self.db_dirs {
+        for db in &self.profiles {
             if Self::is_in_db(db, &nickname) {
                 continue;
             }
@@ -60,12 +50,11 @@ impl super::TrustBackend for NssTrustStore {
         Ok(())
     }
 
-    /// Removes the certificate from every NSS database that contains it.
     fn uninstall(&self, id: &str) -> Result<()> {
         let nickname = Self::cert_nickname(id);
         let mut errors: Vec<String> = Vec::new();
 
-        for db in &self.db_dirs {
+        for db in &self.profiles {
             if !Self::is_in_db(db, &nickname) {
                 continue;
             }
@@ -89,84 +78,131 @@ impl super::TrustBackend for NssTrustStore {
 
 /// Trust store implementation targeting NSS certificate databases.
 pub struct NssTrustStore {
-    /// List of discovered NSS databases on the system, each with its directory and format.
-    db_dirs: Vec<NssDatabase>,
+    certutil_path: PathBuf,
+    profiles: Vec<NssDatabase>,
 }
 
 impl NssTrustStore {
     /// Discovers all NSS databases on the system and returns a new store handle.
-    pub fn new() -> Result<Self> {
+    pub fn new(profile_dirs: Vec<String>) -> Result<Self> {
+        let certutil_path = Self::find_certutil();
+        let profiles = Self::discover_profiles(profile_dirs);
+
+        if certutil_path.is_none() {
+            anyhow::bail!(
+                "Unable to find `certutil` in PATH. NSS trust store operations will be unavailable. \
+                Please install `nss-tools` and ensure `certutil` is on your PATH."
+            );
+        }
+
+        if profiles.is_empty() {
+            anyhow::bail!(
+                "No NSS certificate databases found. NSS trust store operations will be unavailable."
+            );
+        }
+
         Ok(Self {
-            db_dirs: Self::discover_databases(),
+            certutil_path,
+            profiles,
         })
     }
 
-    /// Returns the nickname used to identify the certificate inside NSS databases.
-    fn cert_nickname(id: &str) -> String {
-        format!("devcert-{}", id)
-    }
+    fn discover_profiles(dirs: Vec<String>) -> Vec<NssDatabase> {
+        let mut profiles = Vec::new();
 
-    /// Discovers NSS databases by scanning common profile directories for Firefox, Chrome, and other
-    /// Chromium-based browsers, as well as the default NSS database location.
-    fn discover_databases() -> Vec<NssDatabase> {
-        let home = match env::home_dir() {
-            Some(h) => h,
-            None => return Vec::new(),
-        };
-
-        let profile_roots: &[PathBuf] = &[
-            home.join(".mozilla/firefox"),
-            home.join("Library/Application Support/Firefox/Profiles"),
-            home.join(".config/chromium"),
-            home.join(".config/google-chrome"),
-            home.join("Library/Application Support/Google/Chrome"),
-            home.join(".config/BraveSoftware/Brave-Browser"),
-            home.join(".pki/nssdb"),
-        ];
-
-        let mut databases = Vec::new();
-
-        for root in profile_roots {
-            if !root.exists() {
-                continue;
+        // NSS databases
+        for root in Self::get_nss_dbs() {
+            if let Some(db) = Self::classify(&root) {
+                profiles.push(db);
             }
+        }
 
-            if Self::is_nss_dir(root) {
-                if let Some(db) = Self::classify(root) {
-                    databases.push(db);
-                }
-                continue;
-            }
-
-            let entries = match std::fs::read_dir(root) {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-
-            for entry in entries.flatten() {
-                let path = entry.path();
-
-                if path.is_dir()
-                    && Self::is_nss_dir(&path)
-                    && let Some(db) = Self::classify(&path)
-                {
-                    databases.push(db);
+        // Firefox profiles
+        for pattern in Self::get_firefox_profile_globs() {
+            if let Ok(entries) = glob::glob(&pattern) {
+                for entry in entries.flatten() {
+                    if let Some(db) = Self::classify(&entry) {
+                        profiles.push(db);
+                    }
                 }
             }
         }
 
-        databases
+        // Additional custom profile directories specified by the user
+        for pattern in dirs {
+            if let Ok(entries) = glob::glob(&pattern) {
+                for entry in entries.flatten() {
+                    if let Some(db) = Self::classify(&entry) {
+                        profiles.push(db);
+                    }
+                }
+            }
+        }
+
+        profiles
     }
 
-    /// Checks if the given directory contains files characteristic of an NSS database (`cert9.db` or `cert8.db`).
-    fn is_nss_dir(dir: &Path) -> bool {
-        dir.join("cert9.db").exists() || dir.join("cert8.db").exists()
+    fn get_nss_dbs() -> Vec<PathBuf> {
+        let mut dbs = Vec::new();
+
+        if let Some(home) = std::env::home_dir() {
+            // Common location for NSS databases
+            dbs.push(home.join(".pki/nssdb"));
+
+            // Snapcraft chromium NSS database location
+            dbs.push(home.join("snap/chromium/current/.pki/nssdb"));
+        } else {
+            crate::report::debug("Unable to determine home directory for NSS database discovery");
+        }
+
+        // CentOS 7 NSS database location
+        dbs.push(PathBuf::from("/etc/pki/nssdb"));
+
+        dbs
     }
 
-    /// Classifies the NSS database format (SQLite or DBM) based on the presence of `cert9.db` or
-    /// `cert8.db` files in the directory.
-    ///
-    /// Returns `None` if neither file is found, indicating that the directory is not a valid NSS database.
+    #[cfg(target_os = "linux")]
+    fn get_firefox_profile_globs() -> Vec<String> {
+        let mut globs = Vec::new();
+
+        if let Some(home) = std::env::home_dir().map(|h| h.display().to_string()) {
+            globs.extend([
+                format!("{}/.mozilla/firefox/*", home),
+                format!("{}/snap/firefox/common/.mozilla/firefox/*", home),
+            ]);
+        }
+
+        globs
+    }
+
+    #[cfg(target_os = "macos")]
+    fn get_firefox_profile_globs() -> Vec<String> {
+        let mut globs = Vec::new();
+
+        if let Some(home) = std::env::home_dir().map(|h| h.display().to_string()) {
+            globs.push(format!(
+                "{}/Library/Application Support/Firefox/Profiles/*",
+                home
+            ));
+        }
+
+        globs
+    }
+
+    #[cfg(target_os = "windows")]
+    fn get_firefox_profile_globs() -> Vec<String> {
+        let mut globs = Vec::new();
+
+        if let Some(profile) = std::env::var("USERPROFILE") {
+            globs.push(format!(
+                "{}\\AppData\\Roaming\\Mozilla\\Firefox\\Profiles\\*",
+                profile
+            ));
+        }
+
+        globs
+    }
+
     fn classify(dir: &Path) -> Option<NssDatabase> {
         if dir.join("cert9.db").exists() {
             Some(NssDatabase {
@@ -183,50 +219,65 @@ impl NssTrustStore {
         }
     }
 
-    /// Runs the `certutil` command with the specified arguments and checks for successful execution.
-    fn run_certutil(args: &[&str]) -> Result<()> {
-        let status = Command::new("certutil")
-            .args(args)
-            .stdout(Stdio::null())
-            .status()
-            .with_context(|| format!("Failed to run: certutil {}", args.join(" ")))?;
-
-        if !status.success() {
-            anyhow::bail!("certutil failed — is `nss-tools` installed?");
+    fn find_certutil() -> Option<PathBuf> {
+        if let Ok(path) = which::which("certutil") {
+            crate::debug!("Found certutil at: {:?}", path);
+            return Some(path.canonicalize().unwrap_or(path));
         }
 
-        Ok(())
-    }
+        #[cfg(target_os = "macos")]
+        {
+            // Check common Homebrew hardcoded locations first as a fast path
+            // /usr/local is the Intel default; /opt/homebrew is Apple Silicon
+            let brew_paths = [
+                "usr/local/opt/nss/bin/certutil",
+                "opt/homebrew/opt/nss/bin/certutil",
+            ];
 
-    /// Checks if the given nickname exists in the specified NSS database.
-    fn is_in_db(db: &NssDatabase, nickname: &str) -> bool {
-        Command::new("certutil")
-            .args(["-L", "-d", &db.certutil_dir_arg(), "-n", nickname])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    }
+            for path in brew_paths {
+                let brew_path = PathBuf::from(path);
+                if brew_path.exists() {
+                    crate::debug!("Found certutil at Homebrew path: {:?}", brew_path);
+                    return Some(brew_path.canonicalize().unwrap_or(brew_path));
+                }
+            }
 
-    /// Adds the certificate to the specified NSS database with the given nickname.
-    fn add_to_db(db: &NssDatabase, cert_path: &Path, nickname: &str) -> Result<()> {
-        Self::run_certutil(&[
-            "-A",
-            "-d",
-            &db.certutil_dir_arg(),
-            "-n",
-            nickname,
-            "-t",
-            "CT,,", // trusted CA for SSL client & server
-            "-i",
-            &cert_path.to_string_lossy(),
-        ])
-    }
+            // Fallback to asking Homebrew directly, but only if we can find brew
+            // itself to avoid hanging or erroring where homebrew may not be on PATH
+            let brew_bin = which::which("brew").ok().or_else(|| {
+                // Homebrew's canonical locations as last resort
+                ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"]
+                    .iter()
+                    .map(PathBuf::from)
+                    .find(|p| p.exists())
+            });
 
-    /// Deletes the certificate with the given nickname from the specified NSS database.
-    fn remove_from_db(db: &NssDatabase, nickname: &str) -> Result<()> {
-        Self::run_certutil(&["-D", "-d", &db.certutil_dir_arg(), "-n", nickname])
+            if let Some(brew) = brew_bin {
+                match Command::new(brew).args(["--prefix", "nss"]).output() {
+                    Ok(output) if output.status.success() => {
+                        let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        let path = PathBuf::from(prefix).join("bin/certutil");
+
+                        if path.exists() {
+                            crate::debug!("Found certutil via Homebrew prefix: {:?}", path);
+                            return Some(path.canonicalize().unwrap_or(path));
+                        }
+                    }
+                    Ok(output) => {
+                        crate::debug!(
+                            "`brew --prefix nss` failed ({}): {}",
+                            output.status,
+                            String::from_utf8_lossy(&output.stderr).trim(),
+                        );
+                    }
+                    Err(e) => {
+                        crate::debug!("Failed to execute brew to find certutil: {}", e);
+                    }
+                }
+            }
+        }
+
+        None
     }
 }
 
