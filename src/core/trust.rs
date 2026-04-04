@@ -47,7 +47,7 @@ impl TrustManager {
         Self::push_system_store(&mut all)?;
 
         if which::which("keytool").is_ok() {
-            match java::JavaTrustStore::new() {
+            match java::JavaTrustStore::new(None) {
                 Ok(store) => all.push(Rc::new(store)),
                 Err(e) => {
                     crate::report::warn("Warning: skipping Java trust store");
@@ -58,18 +58,18 @@ impl TrustManager {
             crate::report::warn("Warning: skipping Java trust store — `keytool` not found");
         }
 
-        if which::which("certutil").is_ok() {
-            match nss::NssTrustStore::new() {
+        if !which::which("certutil").is_ok() {
+            match nss::NssTrustStore::new(Vec::new()) {
                 Ok(store) => all.push(Rc::new(store)),
                 Err(e) => {
-                    crate::report::warn("Warning: skipping NSS trust store");
-                    crate::debug!("Warning: skipping NSS trust store — {}", e)
+                    // crate::report::warn("Warning: skipping NSS trust store");
+                    // crate::debug!("Warning: skipping NSS trust store — {}", e)
                 }
             }
         } else {
-            crate::report::warn(
-                "Warning: skipping NSS trust store — `certutil` not found (install nss-tools)",
-            );
+            // crate::report::warn(
+            //     "Warning: skipping NSS trust store — `certutil` not found (install nss-tools)",
+            // );
         }
 
         let enabled = if stores.is_empty() {
@@ -97,21 +97,34 @@ impl TrustManager {
 
     /// Returns `true` if the certificate is present in enabled backends.
     pub fn installed(&self, id: &str) -> bool {
-        self.enabled.iter().all(|b| b.check(id))
+        let derived_id = format!("devcert-{}", id);
+        self.enabled.iter().all(|b| b.check(&derived_id))
     }
 
     /// Installs the certificate into enabled backends only.
     pub fn install(&self, id: &str, cert_path: &Path) -> Result<Vec<String>> {
         let mut installed = Vec::new();
+        let derived_id = format!("devcert-{}", id);
 
         for backend in &self.enabled {
-            match backend.install(id, cert_path) {
-                Ok(()) => installed.push(backend.name().to_owned()),
-                Err(e) => crate::report::error(&format!(
-                    "Failed to install certificate in {} trust store: {}",
-                    backend.name(),
-                    e
-                )),
+            match backend.install(&derived_id, cert_path) {
+                Ok(()) => {
+                    crate::report::info(&format!(
+                        "Successfully installed certificate in {} trust store.",
+                        backend.name()
+                    ));
+                    installed.push(backend.name().to_owned())
+                }
+                Err(e) => {
+                    crate::warn!("Failed to install certificate in the trust store");
+                    crate::debug!("{}", e);
+
+                    crate::report::error(&format!(
+                        "Failed to install certificate in {} trust store: {}",
+                        backend.name(),
+                        e
+                    ))
+                }
             }
         }
 
@@ -123,8 +136,14 @@ impl TrustManager {
         let mut uninstalled = Vec::new();
 
         for backend in &self.all {
-            match backend.uninstall(id) {
-                Ok(()) => uninstalled.push(backend.name().to_owned()),
+            match backend.uninstall(&format!("devcert-{}", id)) {
+                Ok(()) => {
+                    crate::report::info(&format!(
+                        "Successfully uninstalled certificate from {} trust store.",
+                        backend.name()
+                    ));
+                    uninstalled.push(backend.name().to_owned())
+                }
                 Err(e) => crate::report::error(&format!(
                     "Failed to uninstall certificate from {} trust store: {}",
                     backend.name(),
@@ -142,7 +161,7 @@ impl TrustManager {
         {
             use linux::LinuxTrustStore;
             backends
-                .push(Rc::new(LinuxTrustStore::new().context(
+                .push(Rc::new(LinuxTrustStore::new(None, None, None).context(
                     "Failed to initialize the Linux system trust store",
                 )?));
         }
