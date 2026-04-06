@@ -8,7 +8,6 @@
 //! may need to run DevCert with elevated permissions for these operations to succeed.
 
 use std::{
-    env,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -17,60 +16,61 @@ use anyhow::{Context, Result};
 
 impl super::TrustBackend for NssTrustStore {
     fn check(&self, id: &str) -> bool {
-        if self.profiles.is_empty() {
-            return true;
-        }
+        // if self.profiles.is_empty() {
+        //     return true;
+        // }
 
-        let nickname = Self::cert_nickname(id);
-        self.profiles.iter().all(|db| Self::is_in_db(db, &nickname))
+        // let nickname = Self::cert_nickname(id);
+        // self.profiles.iter().all(|db| Self::is_in_db(db, &nickname))
+        true
     }
 
     fn install(&self, id: &str, cert_path: &Path) -> Result<()> {
-        let nickname = Self::cert_nickname(id);
-        let mut errors: Vec<String> = Vec::new();
+        // let nickname = Self::cert_nickname(id);
+        // let mut errors: Vec<String> = Vec::new();
 
-        for db in &self.profiles {
-            if Self::is_in_db(db, &nickname) {
-                continue;
-            }
+        // for db in &self.profiles {
+        //     if Self::is_in_db(db, &nickname) {
+        //         continue;
+        //     }
 
-            if let Err(e) = Self::add_to_db(db, cert_path, &nickname) {
-                errors.push(format!("{} — {:?}", e, db.dir));
-            }
-        }
+        //     if let Err(e) = Self::add_to_db(db, cert_path, &nickname) {
+        //         errors.push(format!("{} — {:?}", e, db.dir));
+        //     }
+        // }
 
-        if !errors.is_empty() {
-            anyhow::bail!(
-                "Failed to install certificate into {} NSS database(s):\n{}",
-                errors.len(),
-                errors.join("\n")
-            );
-        }
+        // if !errors.is_empty() {
+        //     anyhow::bail!(
+        //         "Failed to install certificate into {} NSS database(s):\n{}",
+        //         errors.len(),
+        //         errors.join("\n")
+        //     );
+        // }
 
         Ok(())
     }
 
     fn uninstall(&self, id: &str) -> Result<()> {
-        let nickname = Self::cert_nickname(id);
-        let mut errors: Vec<String> = Vec::new();
+        // let nickname = Self::cert_nickname(id);
+        // let mut errors: Vec<String> = Vec::new();
 
-        for db in &self.profiles {
-            if !Self::is_in_db(db, &nickname) {
-                continue;
-            }
+        // for db in &self.profiles {
+        //     if !Self::is_in_db(db, &nickname) {
+        //         continue;
+        //     }
 
-            if let Err(e) = Self::remove_from_db(db, &nickname) {
-                errors.push(format!("{} — {:?}", e, db.dir));
-            }
-        }
+        //     if let Err(e) = Self::remove_from_db(db, &nickname) {
+        //         errors.push(format!("{} — {:?}", e, db.dir));
+        //     }
+        // }
 
-        if !errors.is_empty() {
-            anyhow::bail!(
-                "Failed to remove certificate from {} NSS database(s):\n{}",
-                errors.len(),
-                errors.join("\n")
-            );
-        }
+        // if !errors.is_empty() {
+        //     anyhow::bail!(
+        //         "Failed to remove certificate from {} NSS database(s):\n{}",
+        //         errors.len(),
+        //         errors.join("\n")
+        //     );
+        // }
 
         Ok(())
     }
@@ -85,21 +85,23 @@ pub struct NssTrustStore {
 impl NssTrustStore {
     /// Discovers all NSS databases on the system and returns a new store handle.
     pub fn new(profile_dirs: Vec<String>) -> Result<Self> {
-        let certutil_path = Self::find_certutil();
-        let profiles = Self::discover_profiles(profile_dirs);
-
-        if certutil_path.is_none() {
-            anyhow::bail!(
+        let certutil_path = Self::find_certutil().ok_or_else(|| {
+            anyhow::anyhow!(
                 "Unable to find `certutil` in PATH. NSS trust store operations will be unavailable. \
                 Please install `nss-tools` and ensure `certutil` is on your PATH."
-            );
-        }
+            )
+        })?;
+
+        let profiles = Self::discover_profiles(profile_dirs);
 
         if profiles.is_empty() {
             anyhow::bail!(
                 "No NSS certificate databases found. NSS trust store operations will be unavailable."
             );
         }
+
+        crate::debug!("Found certutil at: {:?}", certutil_path);
+        crate::debug!("Found {} NSS profile(s)", profiles.len());
 
         Ok(Self {
             certutil_path,
@@ -203,6 +205,23 @@ impl NssTrustStore {
         globs
     }
 
+    fn exec_certutil(&self, args: &[&str]) {
+        let output = Command::new(&self.certutil_path)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .with_context(|| format!("Failed to execute certutil with args: {:?}", args))?;
+
+        // if !output.status.success() {
+        //     anyhow::bail!(
+        //         "certutil failed with status {}: {}",
+        //         output.status,
+        //         String::from_utf8_lossy(&output.stderr).trim(),
+        //     );
+        // }
+    }
+
     fn classify(dir: &Path) -> Option<NssDatabase> {
         if dir.join("cert9.db").exists() {
             Some(NssDatabase {
@@ -219,6 +238,7 @@ impl NssTrustStore {
         }
     }
 
+    /// Finds the `certutil` executable on the system PATH or at known installation locations.
     fn find_certutil() -> Option<PathBuf> {
         if let Ok(path) = which::which("certutil") {
             crate::debug!("Found certutil at: {:?}", path);
@@ -227,18 +247,23 @@ impl NssTrustStore {
 
         #[cfg(target_os = "macos")]
         {
+            crate::report::debug("certutil not found on PATH, checking known locations");
+
             // Check common Homebrew hardcoded locations first as a fast path
             // /usr/local is the Intel default; /opt/homebrew is Apple Silicon
             let brew_paths = [
-                "usr/local/opt/nss/bin/certutil",
-                "opt/homebrew/opt/nss/bin/certutil",
+                "/usr/local/opt/nss/bin/certutil",
+                "/opt/homebrew/opt/nss/bin/certutil",
             ];
 
             for path in brew_paths {
-                let brew_path = PathBuf::from(path);
-                if brew_path.exists() {
-                    crate::debug!("Found certutil at Homebrew path: {:?}", brew_path);
-                    return Some(brew_path.canonicalize().unwrap_or(brew_path));
+                let candidate = PathBuf::from(path);
+
+                if candidate.exists() {
+                    crate::debug!("Found certutil at Homebrew path: {:?}", candidate);
+                    return Some(candidate.canonicalize().unwrap_or(candidate));
+                } else {
+                    crate::debug!("No certutil at Homebrew path: {:?}", candidate);
                 }
             }
 
