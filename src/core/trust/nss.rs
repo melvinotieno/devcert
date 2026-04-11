@@ -16,36 +16,58 @@ use anyhow::{Context, Result};
 
 impl super::TrustBackend for NssTrustStore {
     fn check(&self, id: &str) -> bool {
-        // if self.profiles.is_empty() {
-        //     return true;
-        // }
-
-        // let nickname = Self::cert_nickname(id);
-        // self.profiles.iter().all(|db| Self::is_in_db(db, &nickname))
-        true
+        self.profiles
+            .iter()
+            .all(|db| self.exec_certutil(&["-L", "-d", &db.certutil_dir_arg(), "-n", id]))
     }
 
     fn install(&self, id: &str, cert_path: &Path) -> Result<()> {
-        // let nickname = Self::cert_nickname(id);
-        // let mut errors: Vec<String> = Vec::new();
+        if self.check(id) {
+            crate::debug!("Certificate {:?} already present, skipping install", id);
+            return Ok(());
+        }
 
-        // for db in &self.profiles {
-        //     if Self::is_in_db(db, &nickname) {
-        //         continue;
-        //     }
+        let mut errors: Vec<String> = Vec::new();
 
-        //     if let Err(e) = Self::add_to_db(db, cert_path, &nickname) {
-        //         errors.push(format!("{} — {:?}", e, db.dir));
-        //     }
-        // }
+        for db in &self.profiles {
+            let is_in_db = self.exec_certutil(&["-L", "-d", &db.certutil_dir_arg(), "-n", id]);
 
-        // if !errors.is_empty() {
-        //     anyhow::bail!(
-        //         "Failed to install certificate into {} NSS database(s):\n{}",
-        //         errors.len(),
-        //         errors.join("\n")
-        //     );
-        // }
+            if is_in_db {
+                crate::debug!(
+                    "Certificate {:?} already present in NSS database {:?}, skipping",
+                    id,
+                    db.dir
+                );
+                continue;
+            }
+
+            let args = [
+                "-A",
+                "-d",
+                &db.certutil_dir_arg(),
+                "-t",
+                "CT,,",
+                "-n",
+                id,
+                "-i",
+                &cert_path.to_string_lossy(),
+            ];
+
+            if !self.exec_certutil(&args) {
+                errors.push(format!(
+                    "Failed to install certificate into NSS database {:?}",
+                    db.dir
+                ));
+            }
+        }
+
+        if !errors.is_empty() {
+            anyhow::bail!(
+                "Failed to install certificate into {} NSS database(s):\n{}",
+                errors.len(),
+                errors.join("\n")
+            );
+        }
 
         Ok(())
     }
@@ -109,17 +131,18 @@ impl NssTrustStore {
         })
     }
 
+    /// Discovers all NSS databases from well-known paths and any user-specified directories.
     fn discover_profiles(dirs: Vec<String>) -> Vec<NssDatabase> {
         let mut profiles = Vec::new();
 
-        // NSS databases
+        // Well-known NSS database paths
         for root in Self::get_nss_dbs() {
             if let Some(db) = Self::classify(&root) {
                 profiles.push(db);
             }
         }
 
-        // Firefox profiles
+        // Firefox profile directories
         for pattern in Self::get_firefox_profile_globs() {
             if let Ok(entries) = glob::glob(&pattern) {
                 for entry in entries.flatten() {
@@ -130,7 +153,7 @@ impl NssTrustStore {
             }
         }
 
-        // Additional custom profile directories specified by the user
+        // User-specified additional profile directories
         for pattern in dirs {
             if let Ok(entries) = glob::glob(&pattern) {
                 for entry in entries.flatten() {
@@ -141,9 +164,12 @@ impl NssTrustStore {
             }
         }
 
+        crate::debug!("Discovered {} NSS database(s) in total", profiles.len());
+
         profiles
     }
 
+    /// Returns well-known paths for system and browser NSS databases.
     fn get_nss_dbs() -> Vec<PathBuf> {
         let mut dbs = Vec::new();
 
@@ -163,6 +189,7 @@ impl NssTrustStore {
         dbs
     }
 
+    /// Returns glob patterns for common Firefox profile locations across platforms.
     #[cfg(target_os = "linux")]
     fn get_firefox_profile_globs() -> Vec<String> {
         let mut globs = Vec::new();
@@ -205,23 +232,93 @@ impl NssTrustStore {
         globs
     }
 
-    fn exec_certutil(&self, args: &[&str]) {
-        let output = Command::new(&self.certutil_path)
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .with_context(|| format!("Failed to execute certutil with args: {:?}", args))?;
+    /// Checks whether a certificate with the given nickname is present in the given NSS database.
+    fn is_in_db(&self, db: &NssDatabase, nickname: &str) -> bool {
+        let dir_arg = db.certutil_dir_arg();
 
-        // if !output.status.success() {
-        //     anyhow::bail!(
-        //         "certutil failed with status {}: {}",
-        //         output.status,
-        //         String::from_utf8_lossy(&output.stderr).trim(),
-        //     );
-        // }
+        crate::debug!(
+            "Checking for certificate {:?} in NSS database {:?} (format: {:?})",
+            nickname,
+            db.dir,
+            db.format
+        );
+
+        self.exec_certutil(&["-L", "-d", &dir_arg, "-n", nickname])
     }
 
+    /// Adds a certificate to the given NSS database.
+    fn add_to_db(&self, db: &NssDatabase, cert_path: &Path, nickname: &str) -> Result<()> {
+        let dir_arg = db.certutil_dir_arg();
+        let cert_str = cert_path.to_string_lossy();
+
+        crate::debug!(
+            "Installing certificate {:?} into NSS database {:?} (format: {:?})",
+            nickname,
+            db.dir,
+            db.format
+        );
+
+        if !self.exec_certutil(&[
+            "-A", "-d", &dir_arg, "-t", "CT,,", "-n", nickname, "-i", &cert_str,
+        ]) {
+            anyhow::bail!(
+                "Failed to install certificate into NSS database {:?}",
+                db.dir
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Removes a certificate from the given NSS database.
+    fn remove_from_db(&self, db: &NssDatabase, nickname: &str) -> Result<()> {
+        let dir_arg = db.certutil_dir_arg();
+
+        crate::debug!(
+            "Removing certificate {:?} from NSS database {:?} (format: {:?})",
+            nickname,
+            db.dir,
+            db.format
+        );
+
+        if !self.exec_certutil(&["-D", "-d", &dir_arg, "-n", nickname]) {
+            anyhow::bail!(
+                "Failed to remove certificate from NSS database {:?}",
+                db.dir
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Executes a `certutil` command with the given arguments and returns whether it succeeded.
+    fn exec_certutil(&self, args: &[&str]) -> bool {
+        let output = Command::new(&self.certutil_path).args(args).output();
+
+        let output = match output {
+            Ok(o) => o,
+            Err(e) => {
+                crate::debug!("Failed to execute certutil: {}", e);
+                return false;
+            }
+        };
+
+        crate::debug!("certutil command args:\n{:?}", args);
+
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        )
+        .trim()
+        .to_string();
+
+        crate::debug!("certutil command output:\n{}", combined);
+
+        output.status.success()
+    }
+
+    /// Classifies a directory as an NSS database if it contains `cert9.db` (SQL) or `cert8.db` (DBM).
     fn classify(dir: &Path) -> Option<NssDatabase> {
         if dir.join("cert9.db").exists() {
             Some(NssDatabase {
@@ -286,6 +383,8 @@ impl NssTrustStore {
                         if path.exists() {
                             crate::debug!("Found certutil via Homebrew prefix: {:?}", path);
                             return Some(path.canonicalize().unwrap_or(path));
+                        } else {
+                            crate::debug!("No certutil found at Homebrew prefix path: {:?}", path);
                         }
                     }
                     Ok(output) => {
@@ -299,6 +398,8 @@ impl NssTrustStore {
                         crate::debug!("Failed to execute brew to find certutil: {}", e);
                     }
                 }
+            } else {
+                crate::report::debug("Homebrew not found, cannot query for NSS prefix");
             }
         }
 
