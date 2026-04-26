@@ -7,12 +7,10 @@
 //! Note: Modifying NSS databases typically requires administrative privileges, so users
 //! may need to run DevCert with elevated permissions for these operations to succeed.
 
-use std::{
-    path::{Path, PathBuf},
-    process::{Command, Stdio},
-};
+use std::path::PathBuf;
+use std::process::Command;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 impl super::TrustBackend for NssTrustStore {
     fn check(&self, id: &str) -> bool {
@@ -21,7 +19,7 @@ impl super::TrustBackend for NssTrustStore {
             .all(|db| self.exec_certutil(&["-L", "-d", &db.certutil_dir_arg(), "-n", id]))
     }
 
-    fn install(&self, id: &str, cert_path: &Path) -> Result<()> {
+    fn install(&self, id: &str, cert_path: &std::path::Path) -> Result<()> {
         if self.check(id) {
             crate::debug!("Certificate {:?} already present, skipping install", id);
             return Ok(());
@@ -73,26 +71,42 @@ impl super::TrustBackend for NssTrustStore {
     }
 
     fn uninstall(&self, id: &str) -> Result<()> {
-        // let nickname = Self::cert_nickname(id);
-        // let mut errors: Vec<String> = Vec::new();
+        if !self.check(id) {
+            crate::debug!("Certificate {:?} not present, skipping uninstall", id);
+            return Ok(());
+        }
 
-        // for db in &self.profiles {
-        //     if !Self::is_in_db(db, &nickname) {
-        //         continue;
-        //     }
+        let mut errors: Vec<String> = Vec::new();
 
-        //     if let Err(e) = Self::remove_from_db(db, &nickname) {
-        //         errors.push(format!("{} — {:?}", e, db.dir));
-        //     }
-        // }
+        for db in &self.profiles {
+            let is_in_db = self.exec_certutil(&["-L", "-d", &db.certutil_dir_arg(), "-n", id]);
 
-        // if !errors.is_empty() {
-        //     anyhow::bail!(
-        //         "Failed to remove certificate from {} NSS database(s):\n{}",
-        //         errors.len(),
-        //         errors.join("\n")
-        //     );
-        // }
+            if !is_in_db {
+                crate::debug!(
+                    "Certificate {:?} not present in NSS database {:?}, skipping",
+                    id,
+                    db.dir
+                );
+                continue;
+            }
+
+            let args = ["-D", "-d", &db.certutil_dir_arg(), "-n", id];
+
+            if !self.exec_certutil(&args) {
+                errors.push(format!(
+                    "Failed to remove certificate from NSS database {:?}",
+                    db.dir
+                ));
+            }
+        }
+
+        if !errors.is_empty() {
+            anyhow::bail!(
+                "Failed to remove certificate from {} NSS database(s):\n{}",
+                errors.len(),
+                errors.join("\n")
+            );
+        }
 
         Ok(())
     }
@@ -100,7 +114,9 @@ impl super::TrustBackend for NssTrustStore {
 
 /// Trust store implementation targeting NSS certificate databases.
 pub struct NssTrustStore {
+    /// Path to the `certutil` executable used for managing NSS databases.
     certutil_path: PathBuf,
+    /// Discovered NSS databases across the system, including browser profiles and system stores.
     profiles: Vec<NssDatabase>,
 }
 
@@ -121,9 +137,6 @@ impl NssTrustStore {
                 "No NSS certificate databases found. NSS trust store operations will be unavailable."
             );
         }
-
-        crate::debug!("Found certutil at: {:?}", certutil_path);
-        crate::debug!("Found {} NSS profile(s)", profiles.len());
 
         Ok(Self {
             certutil_path,
@@ -232,65 +245,6 @@ impl NssTrustStore {
         globs
     }
 
-    /// Checks whether a certificate with the given nickname is present in the given NSS database.
-    fn is_in_db(&self, db: &NssDatabase, nickname: &str) -> bool {
-        let dir_arg = db.certutil_dir_arg();
-
-        crate::debug!(
-            "Checking for certificate {:?} in NSS database {:?} (format: {:?})",
-            nickname,
-            db.dir,
-            db.format
-        );
-
-        self.exec_certutil(&["-L", "-d", &dir_arg, "-n", nickname])
-    }
-
-    /// Adds a certificate to the given NSS database.
-    fn add_to_db(&self, db: &NssDatabase, cert_path: &Path, nickname: &str) -> Result<()> {
-        let dir_arg = db.certutil_dir_arg();
-        let cert_str = cert_path.to_string_lossy();
-
-        crate::debug!(
-            "Installing certificate {:?} into NSS database {:?} (format: {:?})",
-            nickname,
-            db.dir,
-            db.format
-        );
-
-        if !self.exec_certutil(&[
-            "-A", "-d", &dir_arg, "-t", "CT,,", "-n", nickname, "-i", &cert_str,
-        ]) {
-            anyhow::bail!(
-                "Failed to install certificate into NSS database {:?}",
-                db.dir
-            );
-        }
-
-        Ok(())
-    }
-
-    /// Removes a certificate from the given NSS database.
-    fn remove_from_db(&self, db: &NssDatabase, nickname: &str) -> Result<()> {
-        let dir_arg = db.certutil_dir_arg();
-
-        crate::debug!(
-            "Removing certificate {:?} from NSS database {:?} (format: {:?})",
-            nickname,
-            db.dir,
-            db.format
-        );
-
-        if !self.exec_certutil(&["-D", "-d", &dir_arg, "-n", nickname]) {
-            anyhow::bail!(
-                "Failed to remove certificate from NSS database {:?}",
-                db.dir
-            );
-        }
-
-        Ok(())
-    }
-
     /// Executes a `certutil` command with the given arguments and returns whether it succeeded.
     fn exec_certutil(&self, args: &[&str]) -> bool {
         let output = Command::new(&self.certutil_path).args(args).output();
@@ -319,7 +273,7 @@ impl NssTrustStore {
     }
 
     /// Classifies a directory as an NSS database if it contains `cert9.db` (SQL) or `cert8.db` (DBM).
-    fn classify(dir: &Path) -> Option<NssDatabase> {
+    fn classify(dir: &std::path::Path) -> Option<NssDatabase> {
         if dir.join("cert9.db").exists() {
             Some(NssDatabase {
                 dir: dir.to_owned(),
